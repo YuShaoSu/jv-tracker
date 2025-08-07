@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "A Japanese vocabulary learning tracker with Google Sheets integration",
   "private": true,
-  "homepage": "https://YuShaoSu.github.io/jv-tracker",
   "dependencies": {
     "@testing-library/jest-dom": "^5.16.4",
     "@testing-library/react": "^13.3.0",
