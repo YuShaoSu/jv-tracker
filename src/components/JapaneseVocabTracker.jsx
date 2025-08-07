@@ -119,22 +119,38 @@ const JapaneseVocabTracker = () => {
 
     setIsSyncing(true);
     try {
-      const response = await fetch(appsScriptUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'testConnection',
-          sheetId: googleSheetId
-        })
+      // Use JSONP to avoid CORS
+      const callbackName = 'callback_' + Date.now();
+      const url = `${appsScriptUrl}?action=testConnection&sheetId=${encodeURIComponent(googleSheetId)}&callback=${callbackName}`;
+
+      const result = await new Promise((resolve, reject) => {
+        // Create callback function
+        window[callbackName] = (data) => {
+          delete window[callbackName];
+          document.head.removeChild(script);
+          resolve(data);
+        };
+
+        // Create script tag for JSONP
+        const script = document.createElement('script');
+        script.src = url;
+        script.onerror = () => {
+          delete window[callbackName];
+          document.head.removeChild(script);
+          reject(new Error('JSONP request failed'));
+        };
+
+        document.head.appendChild(script);
+
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          if (window[callbackName]) {
+            delete window[callbackName];
+            document.head.removeChild(script);
+            reject(new Error('Request timeout'));
+          }
+        }, 10000);
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
 
       if (result.success) {
         alert(`✅ Connection successful!\nSheet: ${result.sheetName}\nVocabulary count: ${result.vocabularyCount}`);
@@ -157,23 +173,39 @@ const JapaneseVocabTracker = () => {
 
     setIsSyncing(true);
     try {
-      const response = await fetch(appsScriptUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'saveVocabulary',
-          vocabulary: vocabulary,
-          sheetId: googleSheetId
-        })
+      // Use JSONP for sync
+      const callbackName = 'callback_' + Date.now();
+      const vocabularyData = encodeURIComponent(JSON.stringify(vocabulary));
+      const url = `${appsScriptUrl}?action=saveVocabulary&sheetId=${encodeURIComponent(googleSheetId)}&vocabulary=${vocabularyData}&callback=${callbackName}`;
+
+      const result = await new Promise((resolve, reject) => {
+        // Create callback function
+        window[callbackName] = (data) => {
+          delete window[callbackName];
+          document.head.removeChild(script);
+          resolve(data);
+        };
+
+        // Create script tag for JSONP
+        const script = document.createElement('script');
+        script.src = url;
+        script.onerror = () => {
+          delete window[callbackName];
+          document.head.removeChild(script);
+          reject(new Error('JSONP request failed'));
+        };
+
+        document.head.appendChild(script);
+
+        // Timeout after 15 seconds
+        setTimeout(() => {
+          if (window[callbackName]) {
+            delete window[callbackName];
+            document.head.removeChild(script);
+            reject(new Error('Request timeout'));
+          }
+        }, 15000);
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
 
       if (result.success) {
         const now = new Date();
@@ -207,22 +239,38 @@ const JapaneseVocabTracker = () => {
 
     setIsSyncing(true);
     try {
-      const response = await fetch(appsScriptUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'loadVocabulary',
-          sheetId: googleSheetId
-        })
+      // Use JSONP for load
+      const callbackName = 'callback_' + Date.now();
+      const url = `${appsScriptUrl}?action=loadVocabulary&sheetId=${encodeURIComponent(googleSheetId)}&callback=${callbackName}`;
+
+      const result = await new Promise((resolve, reject) => {
+        // Create callback function
+        window[callbackName] = (data) => {
+          delete window[callbackName];
+          document.head.removeChild(script);
+          resolve(data);
+        };
+
+        // Create script tag for JSONP
+        const script = document.createElement('script');
+        script.src = url;
+        script.onerror = () => {
+          delete window[callbackName];
+          document.head.removeChild(script);
+          reject(new Error('JSONP request failed'));
+        };
+
+        document.head.appendChild(script);
+
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          if (window[callbackName]) {
+            delete window[callbackName];
+            document.head.removeChild(script);
+            reject(new Error('Request timeout'));
+          }
+        }, 10000);
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
 
       if (result.success && result.vocabulary) {
         setVocabulary(result.vocabulary);
