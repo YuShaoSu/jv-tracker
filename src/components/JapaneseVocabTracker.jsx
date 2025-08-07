@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, RefreshCw, LogIn, LogOut } from 'lucide-react';
+import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, RefreshCw } from 'lucide-react';
 
 const JapaneseVocabTracker = () => {
   const [vocabulary, setVocabulary] = useState([]);
@@ -10,9 +10,10 @@ const JapaneseVocabTracker = () => {
   const [generatedSentence, setGeneratedSentence] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  
+
   // Google Apps Script integration state
   const [appsScriptUrl, setAppsScriptUrl] = useState('');
+  const [googleSheetId, setGoogleSheetId] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -40,21 +41,22 @@ const JapaneseVocabTracker = () => {
         examples: []
       }
     ];
-    
+
     // Try to load from localStorage first
     const savedVocabulary = localStorage.getItem('japaneseVocabulary');
     const savedSettings = localStorage.getItem('appsScriptSettings');
-    
+
     if (savedVocabulary) {
       setVocabulary(JSON.parse(savedVocabulary));
     } else {
       setVocabulary(sampleData);
     }
-    
+
     if (savedSettings) {
       const settings = JSON.parse(savedSettings);
       setAppsScriptUrl(settings.appsScriptUrl || '');
-      setIsConnected(!!settings.appsScriptUrl);
+      setGoogleSheetId(settings.googleSheetId || '');
+      setIsConnected(!!(settings.appsScriptUrl && settings.googleSheetId));
       setLastSyncTime(settings.lastSync ? new Date(settings.lastSync) : null);
     }
   }, []);
@@ -65,7 +67,7 @@ const JapaneseVocabTracker = () => {
     if (lastSyncTime && vocabulary.length > 0) {
       setSyncStatus('pending');
     }
-  }, [vocabulary]);
+  }, [vocabulary, lastSyncTime]);
 
   const [newWord, setNewWord] = useState({
     kanji: '',
@@ -86,32 +88,73 @@ const JapaneseVocabTracker = () => {
   };
 
   // Google Apps Script API functions
-  const connectToAppsScript = (url) => {
+  const connectToAppsScript = (url, sheetId) => {
     setAppsScriptUrl(url);
+    setGoogleSheetId(sheetId);
     setIsConnected(true);
-    
+
     // Save settings
     const settings = {
       appsScriptUrl: url,
+      googleSheetId: sheetId,
       lastSync: lastSyncTime?.toISOString()
     };
     localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
-    
+
     setSyncStatus('offline');
     setShowSettings(false);
   };
 
   const disconnectAppsScript = () => {
     setAppsScriptUrl('');
+    setGoogleSheetId('');
     setIsConnected(false);
     setLastSyncTime(null);
     setSyncStatus('offline');
     localStorage.removeItem('appsScriptSettings');
   };
 
+  const testConnection = async () => {
+    if (!appsScriptUrl || !googleSheetId) return;
+
+    setIsSyncing(true);
+    try {
+      const response = await fetch(appsScriptUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'testConnection',
+          sheetId: googleSheetId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`✅ Connection successful!\nSheet: ${result.sheetName}\nVocabulary count: ${result.vocabularyCount}`);
+        setSyncStatus('synced');
+      } else {
+        throw new Error(result.message || 'Connection test failed');
+      }
+
+    } catch (error) {
+      console.error('Connection test failed:', error);
+      alert('❌ Connection failed: ' + error.message);
+      setSyncStatus('offline');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const syncToGoogleSheets = async () => {
-    if (!appsScriptUrl || !isConnected) return;
-    
+    if (!appsScriptUrl || !googleSheetId || !isConnected) return;
+
     setIsSyncing(true);
     try {
       const response = await fetch(appsScriptUrl, {
@@ -121,43 +164,47 @@ const JapaneseVocabTracker = () => {
         },
         body: JSON.stringify({
           action: 'saveVocabulary',
-          vocabulary: vocabulary
+          vocabulary: vocabulary,
+          sheetId: googleSheetId
         })
       });
-      
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const result = await response.json();
-      
+
       if (result.success) {
         const now = new Date();
         setLastSyncTime(now);
         setSyncStatus('synced');
-        
+
         // Update saved settings
         const settings = {
           appsScriptUrl: appsScriptUrl,
+          googleSheetId: googleSheetId,
           lastSync: now.toISOString()
         };
         localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
+
+        alert(`✅ Sync successful!\n${result.count} words saved to ${result.sheetName}`);
       } else {
-        throw new Error(result.error || 'Sync failed');
+        throw new Error(result.message || 'Sync failed');
       }
-      
+
     } catch (error) {
       console.error('Sync failed:', error);
       setSyncStatus('pending');
-      alert('Sync failed: ' + error.message);
+      alert('❌ Sync failed: ' + error.message);
     } finally {
       setIsSyncing(false);
     }
   };
 
   const loadFromGoogleSheets = async () => {
-    if (!appsScriptUrl || !isConnected) return;
-    
+    if (!appsScriptUrl || !googleSheetId || !isConnected) return;
+
     setIsSyncing(true);
     try {
       const response = await fetch(appsScriptUrl, {
@@ -166,30 +213,33 @@ const JapaneseVocabTracker = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          action: 'loadVocabulary'
+          action: 'loadVocabulary',
+          sheetId: googleSheetId
         })
       });
-      
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const result = await response.json();
-      
+
       if (result.success && result.vocabulary) {
         setVocabulary(result.vocabulary);
         setSyncStatus('synced');
         setLastSyncTime(new Date());
-        
+
         // Also save to localStorage
         localStorage.setItem('japaneseVocabulary', JSON.stringify(result.vocabulary));
+
+        alert(`✅ Load successful!\n${result.vocabulary.length} words loaded from ${result.sheetName}`);
       } else {
-        throw new Error(result.error || 'Load failed');
+        throw new Error(result.message || 'Load failed');
       }
-      
+
     } catch (error) {
       console.error('Load failed:', error);
-      alert('Load failed: ' + error.message);
+      alert('❌ Load failed: ' + error.message);
     } finally {
       setIsSyncing(false);
     }
@@ -221,11 +271,11 @@ const JapaneseVocabTracker = () => {
           ]
         })
       });
-      
+
       const data = await response.json();
       const sentence = data.content[0].text;
       setGeneratedSentence(sentence);
-      
+
       // Cache the example sentence
       const updatedVocabulary = vocabulary.map(w => {
         if (w.id === word.id) {
@@ -235,7 +285,7 @@ const JapaneseVocabTracker = () => {
         return w;
       });
       setVocabulary(updatedVocabulary);
-      
+
     } catch (error) {
       setGeneratedSentence('Sorry, could not generate example sentence at this time.');
     } finally {
@@ -259,7 +309,7 @@ const JapaneseVocabTracker = () => {
   };
 
   const updateWordStatus = (id, status) => {
-    setVocabulary(vocabulary.map(word => 
+    setVocabulary(vocabulary.map(word =>
       word.id === id ? { ...word, status } : word
     ));
   };
@@ -310,10 +360,10 @@ const JapaneseVocabTracker = () => {
     <div className="bg-white border border-gray-200 rounded-lg p-3 sm:p-4 shadow-sm hover:shadow-md transition-shadow">
       <div className="flex justify-between items-start mb-3">
         <div className="flex-1 min-w-0">
-          <div className="text-xl sm:text-2xl font-bold text-gray-900 mb-1 break-words" style={{fontFamily: 'Noto Sans JP, sans-serif'}}>
+          <div className="text-xl sm:text-2xl font-bold text-gray-900 mb-1 break-words" style={{ fontFamily: 'Noto Sans JP, sans-serif' }}>
             {word.kanji}
           </div>
-          <div className="text-base sm:text-lg text-gray-600 mb-2 break-words" style={{fontFamily: 'Noto Sans JP, sans-serif'}}>
+          <div className="text-base sm:text-lg text-gray-600 mb-2 break-words" style={{ fontFamily: 'Noto Sans JP, sans-serif' }}>
             {word.reading}
           </div>
           <div className="text-sm sm:text-base text-gray-700 mb-3 break-words">
@@ -332,11 +382,11 @@ const JapaneseVocabTracker = () => {
           <X size={16} className="sm:w-[18px] sm:h-[18px]" />
         </button>
       </div>
-      
+
       <div className={`inline-block px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-medium border mb-3 ${statusColors[word.status]}`}>
         {statusLabels[word.status]}
       </div>
-      
+
       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 mb-3">
         <button
           onClick={() => updateWordStatus(word.id, 'often_forget')}
@@ -357,7 +407,7 @@ const JapaneseVocabTracker = () => {
           Know Well
         </button>
       </div>
-      
+
       <button
         onClick={() => {
           setSelectedWord(word);
@@ -388,9 +438,9 @@ const JapaneseVocabTracker = () => {
                 {getSyncStatusIcon()}
                 <span className="hidden sm:inline">{formatLastSync()}</span>
               </div>
-              
+
               {/* Sync Button */}
-              {isConnected && appsScriptUrl && (
+              {isConnected && appsScriptUrl && googleSheetId && (
                 <button
                   onClick={syncToGoogleSheets}
                   disabled={isSyncing}
@@ -400,7 +450,7 @@ const JapaneseVocabTracker = () => {
                   <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Sync'}</span>
                 </button>
               )}
-              
+
               {/* Settings Button */}
               <button
                 onClick={() => setShowSettings(true)}
@@ -417,22 +467,20 @@ const JapaneseVocabTracker = () => {
           <div className="flex border-b overflow-x-auto">
             <button
               onClick={() => setCurrentView('dashboard')}
-              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${
-                currentView === 'dashboard' 
-                  ? 'text-blue-600 border-b-2 border-blue-600' 
+              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === 'dashboard'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-gray-900'
-              }`}
+                }`}
             >
               <TrendingUp size={18} className="sm:w-5 sm:h-5" />
               Dashboard
             </button>
             <button
               onClick={() => setCurrentView('vocabulary')}
-              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${
-                currentView === 'vocabulary' 
-                  ? 'text-blue-600 border-b-2 border-blue-600' 
+              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === 'vocabulary'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-gray-900'
-              }`}
+                }`}
             >
               <BookOpen size={18} className="sm:w-5 sm:h-5" />
               <span className="hidden sm:inline">Vocabulary</span>
@@ -441,11 +489,10 @@ const JapaneseVocabTracker = () => {
             </button>
             <button
               onClick={() => setCurrentView('review')}
-              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${
-                currentView === 'review' 
-                  ? 'text-blue-600 border-b-2 border-blue-600' 
+              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === 'review'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-gray-900'
-              }`}
+                }`}
             >
               <RotateCcw size={18} className="sm:w-5 sm:h-5" />
               Review ({statusCounts.often_forget || 0})
@@ -470,7 +517,7 @@ const JapaneseVocabTracker = () => {
                   </div>
                 </div>
               </div>
-              
+
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 sm:p-6">
                 <div className="flex items-center gap-3 mb-2">
                   <div className="w-8 h-8 sm:w-10 sm:h-10 bg-yellow-500 rounded-full flex items-center justify-center">
@@ -484,7 +531,7 @@ const JapaneseVocabTracker = () => {
                   </div>
                 </div>
               </div>
-              
+
               <div className="bg-red-50 border border-red-200 rounded-lg p-4 sm:p-6">
                 <div className="flex items-center gap-3 mb-2">
                   <div className="w-8 h-8 sm:w-10 sm:h-10 bg-red-500 rounded-full flex items-center justify-center">
@@ -563,37 +610,48 @@ const JapaneseVocabTracker = () => {
                   <X size={20} />
                 </button>
               </div>
-              
+
               <div className="space-y-6">
                 {/* Apps Script Connection Section */}
                 <div>
-                  <h4 className="font-medium text-gray-900 mb-3">Google Apps Script Connection</h4>
+                  <h4 className="font-medium text-gray-900 mb-3">Google Apps Script & Sheets</h4>
                   {!isConnected ? (
                     <div className="space-y-3">
                       <div className="text-sm text-gray-600 mb-2">
-                        Enter your Google Apps Script Web App URL:
+                        Step 1: Enter your Google Apps Script Web App URL:
                       </div>
                       <input
+                        id="appsScriptUrl"
                         type="url"
                         placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter' && e.target.value.trim()) {
-                            connectToAppsScript(e.target.value.trim());
-                          }
-                        }}
                       />
+
+                      <div className="text-sm text-gray-600 mb-2">
+                        Step 2: Enter your Google Sheet ID:
+                      </div>
+                      <input
+                        id="googleSheetId"
+                        type="text"
+                        placeholder="1ABC123DEF456 (from your Google Sheet URL)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                      />
+
                       <button
-                        onClick={(e) => {
-                          const input = e.target.previousElementSibling;
-                          if (input.value.trim()) {
-                            connectToAppsScript(input.value.trim());
+                        onClick={() => {
+                          const urlInput = document.getElementById('appsScriptUrl');
+                          const sheetInput = document.getElementById('googleSheetId');
+                          if (urlInput.value.trim() && sheetInput.value.trim()) {
+                            connectToAppsScript(urlInput.value.trim(), sheetInput.value.trim());
+                          } else {
+                            alert('Please enter both Apps Script URL and Google Sheet ID');
                           }
                         }}
                         className="w-full px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
                       >
-                        Connect to Apps Script
+                        Connect to Google Sheets
                       </button>
+
                       <div className="text-xs text-gray-500">
                         Need help? Check the setup instructions below.
                       </div>
@@ -602,27 +660,38 @@ const JapaneseVocabTracker = () => {
                     <div className="space-y-3">
                       <div className="p-3 bg-green-50 rounded-md">
                         <div className="font-medium text-sm text-green-900">
-                          Connected to Apps Script
+                          ✅ Connected to Google Sheets
                         </div>
-                        <div className="text-xs text-green-600 break-all">
-                          {appsScriptUrl}
+                        <div className="text-xs text-green-600 break-all mt-1">
+                          Script: {appsScriptUrl.substring(0, 50)}...
+                        </div>
+                        <div className="text-xs text-green-600">
+                          Sheet ID: {googleSheetId}
                         </div>
                         <div className="text-xs text-green-600 mt-1">
                           {formatLastSync()}
                         </div>
-                        <button
-                          onClick={disconnectAppsScript}
-                          className="mt-2 text-xs text-green-600 hover:text-green-800"
-                        >
-                          Disconnect
-                        </button>
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={testConnection}
+                            disabled={isSyncing}
+                            className="text-xs text-green-600 hover:text-green-800 disabled:opacity-50"
+                          >
+                            {isSyncing ? 'Testing...' : 'Test Connection'}
+                          </button>
+                          <button
+                            className="text-xs text-green-600 hover:text-green-800"
+                          >
+                            Disconnect
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
                 </div>
 
                 {/* Sync Actions */}
-                {isConnected && appsScriptUrl && (
+                {isConnected && appsScriptUrl && googleSheetId && (
                   <div>
                     <h4 className="font-medium text-gray-900 mb-3">Sync Actions</h4>
                     <div className="space-y-2">
@@ -649,16 +718,34 @@ const JapaneseVocabTracker = () => {
                 {/* Setup Instructions */}
                 <div>
                   <h4 className="font-medium text-gray-900 mb-3">Setup Instructions</h4>
-                  <div className="text-xs text-gray-600 space-y-2">
-                    <div className="p-3 bg-gray-50 rounded-md">
-                      <div className="font-medium mb-2">Quick Setup:</div>
-                      <ol className="list-decimal list-inside space-y-1">
-                        <li>Go to <a href="https://script.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">script.google.com</a></li>
-                        <li>Create a new project</li>
-                        <li>Copy and paste the provided Apps Script code</li>
-                        <li>Deploy as web app (Execute as: Me, Access: Anyone)</li>
-                        <li>Copy the web app URL and paste it above</li>
+                  <div className="text-xs text-gray-600 space-y-3">
+                    <div className="p-3 bg-blue-50 rounded-md">
+                      <div className="font-medium mb-2 text-blue-900">Quick Setup Guide:</div>
+                      <ol className="list-decimal list-inside space-y-1 text-blue-800">
+                        <li>Create a <a href="https://sheets.google.com" target="_blank" rel="noopener noreferrer" className="underline">new Google Sheet</a></li>
+                        <li>Copy the Sheet ID from the URL (the long string after /d/)</li>
+                        <li>Go to <a href="https://script.google.com" target="_blank" rel="noopener noreferrer" className="underline">script.google.com</a></li>
+                        <li>Create new project and paste the provided Apps Script code</li>
+                        <li>Deploy as Web App (Execute as: Me, Access: Anyone)</li>
+                        <li>Copy both URLs and paste them above</li>
                       </ol>
+                    </div>
+
+                    <div className="p-3 bg-gray-50 rounded-md">
+                      <div className="font-medium mb-1">How to get Google Sheet ID:</div>
+                      <div className="text-xs">
+                        From URL: <code className="bg-gray-200 px-1 rounded">https://docs.google.com/spreadsheets/d/<strong>1ABC123DEF456</strong>/edit</code>
+                        <br />
+                        Copy the bold part: <code className="bg-gray-200 px-1 rounded">1ABC123DEF456</code>
+                      </div>
+                    </div>
+
+                    <div className="p-3 bg-yellow-50 rounded-md">
+                      <div className="font-medium mb-1 text-yellow-800">🔒 Security Note:</div>
+                      <div className="text-xs text-yellow-700">
+                        Your Google Sheet remains private! The script only provides secure API access to YOUR data.
+                        Others cannot see or modify your vocabulary.
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -672,7 +759,7 @@ const JapaneseVocabTracker = () => {
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 sm:p-4 z-50">
             <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-md mx-3">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Add New Word</h3>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -681,13 +768,13 @@ const JapaneseVocabTracker = () => {
                   <input
                     type="text"
                     value={newWord.kanji}
-                    onChange={(e) => setNewWord({...newWord, kanji: e.target.value})}
+                    onChange={(e) => setNewWord({ ...newWord, kanji: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
                     placeholder="漢字"
-                    style={{fontFamily: 'Noto Sans JP, sans-serif'}}
+                    style={{ fontFamily: 'Noto Sans JP, sans-serif' }}
                   />
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Reading (Hiragana/Katakana)
@@ -695,13 +782,13 @@ const JapaneseVocabTracker = () => {
                   <input
                     type="text"
                     value={newWord.reading}
-                    onChange={(e) => setNewWord({...newWord, reading: e.target.value})}
+                    onChange={(e) => setNewWord({ ...newWord, reading: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
                     placeholder="かんじ"
-                    style={{fontFamily: 'Noto Sans JP, sans-serif'}}
+                    style={{ fontFamily: 'Noto Sans JP, sans-serif' }}
                   />
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Meaning (English)
@@ -709,13 +796,13 @@ const JapaneseVocabTracker = () => {
                   <input
                     type="text"
                     value={newWord.meaning}
-                    onChange={(e) => setNewWord({...newWord, meaning: e.target.value})}
+                    onChange={(e) => setNewWord({ ...newWord, meaning: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
                     placeholder="Chinese character"
                   />
                 </div>
               </div>
-              
+
               <div className="flex flex-col sm:flex-row gap-3 mt-6">
                 <button
                   onClick={() => setShowAddForm(false)}
@@ -753,7 +840,7 @@ const JapaneseVocabTracker = () => {
                   <X size={20} className="sm:w-6 sm:h-6" />
                 </button>
               </div>
-              
+
               <div className="mb-4">
                 <div className="text-gray-600 mb-2 text-sm sm:text-base">Meaning: {selectedWord.meaning}</div>
                 {selectedWord.examples && selectedWord.examples.length > 0 && (
@@ -762,7 +849,7 @@ const JapaneseVocabTracker = () => {
                   </div>
                 )}
               </div>
-              
+
               <div className="bg-gray-50 rounded-lg p-3 sm:p-4 min-h-24">
                 {isGenerating ? (
                   <div className="flex items-center justify-center py-6 sm:py-8">
@@ -770,26 +857,26 @@ const JapaneseVocabTracker = () => {
                     <span className="ml-3 text-gray-600 text-sm sm:text-base">Generating example sentence...</span>
                   </div>
                 ) : generatedSentence ? (
-                  <div className="text-gray-800 whitespace-pre-wrap text-sm sm:text-base leading-relaxed" style={{fontFamily: 'Noto Sans JP, sans-serif'}}>
+                  <div className="text-gray-800 whitespace-pre-wrap text-sm sm:text-base leading-relaxed" style={{ fontFamily: 'Noto Sans JP, sans-serif' }}>
                     {generatedSentence}
                   </div>
                 ) : (
                   <div className="text-gray-500 text-sm sm:text-base">
-                    {selectedWord.examples && selectedWord.examples.length > 0 
+                    {selectedWord.examples && selectedWord.examples.length > 0
                       ? 'Click "Show Another Example" to see a different example.'
                       : 'Click "Generate New Example" to see an example sentence.'
                     }
                   </div>
                 )}
               </div>
-              
+
               <div className="flex flex-col sm:flex-row gap-3 mt-4 sm:mt-6">
                 <button
                   onClick={() => generateExampleSentence(selectedWord)}
                   disabled={isGenerating}
                   className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm sm:text-base"
                 >
-                  {selectedWord.examples && selectedWord.examples.length > 0 
+                  {selectedWord.examples && selectedWord.examples.length > 0
                     ? (isGenerating ? 'Generating...' : 'Generate New Example')
                     : (isGenerating ? 'Generating...' : 'Generate Example')
                   }
