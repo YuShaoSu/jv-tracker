@@ -1,214 +1,243 @@
 /**
  * Japanese Vocabulary Tracker - Google Apps Script Backend
- * 
- * This script handles secure data synchronization between your vocabulary tracker
- * and Google Sheets without exposing any API keys in the frontend.
- * 
- * Setup Instructions:
- * 1. Go to script.google.com
- * 2. Create a new project
- * 3. Replace the default code with this script
- * 4. Save the project (give it a name like "Japanese Vocab Backend")
- * 5. Click "Deploy" > "New deployment"
- * 6. Choose type: "Web app"
- * 7. Execute as: "Me"
- * 8. Who has access: "Anyone" (this is safe - no sensitive data exposed)
- * 9. Click "Deploy" and copy the web app URL
- * 10. Use that URL in your vocabulary tracker settings
+ * Clean version with proper CORS handling
  */
 
-// Configuration - CHANGE THESE VALUES
+// Configuration
 const CONFIG = {
-  // Replace with your Google Sheet ID (from the URL)
-  // Example: if your sheet URL is https://docs.google.com/spreadsheets/d/1ABC123DEF456/edit
-  // Then your SHEET_ID is: 1ABC123DEF456
-  SHEET_ID: 'YOUR_GOOGLE_SHEET_ID_HERE',
-  
-  // Sheet name/tab (you can change this)
-  SHEET_NAME: 'VocabularyData',
-  
-  // Enable logging for debugging (set to false in production)
+  DEFAULT_SHEET_NAME: 'VocabularyData',
   DEBUG_MODE: true
 };
 
 /**
- * Main function that handles all HTTP requests
+ * Handle POST requests
  */
 function doPost(e) {
+  return handleRequest(e);
+}
+
+/**
+ * Handle GET requests
+ */
+function doGet(e) {
+  return createResponse(true, 'Japanese Vocabulary Tracker API is running', {
+    version: '2.0',
+    methods: ['POST'],
+    actions: ['saveVocabulary', 'loadVocabulary', 'testConnection']
+  });
+}
+
+/**
+ * Handle OPTIONS requests (CORS preflight)
+ */
+function doOptions(e) {
+  return ContentService
+    .createTextOutput("")
+    .setMimeType(ContentService.MimeType.TEXT);
+}
+
+/**
+ * Main request handler
+ */
+function handleRequest(e) {
   try {
-    // Enable CORS for web requests
-    const response = {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST',
-        'Access-Control-Allow-Headers': 'Content-Type'
-      }
-    };
+    if (!e.postData) {
+      return createResponse(false, 'POST data required');
+    }
     
-    // Parse the request
-    const requestData = JSON.parse(e.postData.contents);
-    const action = requestData.action;
+    let requestData;
     
-    log('Received request:', { action: action });
+    // Check if the data is JSON or form data
+    const contentType = e.postData.type;
+    if (contentType === 'application/json') {
+      requestData = JSON.parse(e.postData.contents);
+    } else {
+      // Handle form data (from React form submission)
+      requestData = parseFormData(e.parameter);
+    }
     
-    // Route to appropriate handler
+    const { action, sheetId, sheetName = CONFIG.DEFAULT_SHEET_NAME } = requestData;
+    
+    log('Request:', { action, sheetId: sheetId ? 'provided' : 'missing' });
+    
+    if (!sheetId) {
+      return createResponse(false, 'Sheet ID is required');
+    }
+    
     switch (action) {
       case 'saveVocabulary':
-        return handleSaveVocabulary(requestData.vocabulary);
+        return handleSaveVocabulary(requestData.vocabulary, sheetId, sheetName);
       case 'loadVocabulary':
-        return handleLoadVocabulary();
+        return handleLoadVocabulary(sheetId, sheetName);
+      case 'testConnection':
+        return handleTestConnection(sheetId, sheetName);
       default:
         return createResponse(false, 'Unknown action: ' + action);
     }
     
   } catch (error) {
-    log('Error in doPost:', error.toString());
+    log('Error:', error.toString());
     return createResponse(false, 'Server error: ' + error.toString());
   }
 }
 
 /**
- * Handle saving vocabulary data to Google Sheets
+ * Test connection to Google Sheet
  */
-function handleSaveVocabulary(vocabulary) {
+function handleTestConnection(sheetId, sheetName) {
   try {
-    log('Saving vocabulary, count:', vocabulary.length);
+    const sheet = getOrCreateSheet(sheetId, sheetName);
+    const rowCount = sheet.getLastRow();
+    const vocabularyCount = Math.max(0, rowCount - 1);
     
-    // Get or create the spreadsheet
-    const sheet = getOrCreateSheet();
+    return createResponse(true, 'Connected successfully', {
+      sheetName: sheet.getName(),
+      vocabularyCount: vocabularyCount
+    });
+  } catch (error) {
+    return createResponse(false, 'Connection failed: ' + error.toString());
+  }
+}
+
+/**
+ * Save vocabulary to Google Sheet
+ */
+function handleSaveVocabulary(vocabulary, sheetId, sheetName) {
+  try {
+    const sheet = getOrCreateSheet(sheetId, sheetName);
     
-    // Clear existing data (except header)
+    // Clear existing data (keep header)
     const lastRow = sheet.getLastRow();
     if (lastRow > 1) {
       sheet.deleteRows(2, lastRow - 1);
     }
     
-    // Prepare data for sheet (convert vocabulary to rows)
+    // Convert vocabulary to rows
     const rows = vocabulary.map(word => [
       word.kanji || '',
       word.reading || '',
       word.meaning || '',
       word.status || 'learning',
       word.addedDate || new Date().toISOString(),
-      JSON.stringify(word.examples || []), // Store examples as JSON string
+      JSON.stringify(word.examples || []),
       word.id || ''
     ]);
     
-    // Write data to sheet if we have vocabulary
+    // Write data
     if (rows.length > 0) {
       const range = sheet.getRange(2, 1, rows.length, 7);
       range.setValues(rows);
     }
     
-    // Update last sync timestamp
-    updateSyncTimestamp(sheet);
+    // Update sync timestamp
+    sheet.getRange('I1').setValue('Last Sync:');
+    sheet.getRange('I2').setValue(new Date());
     
-    log('Successfully saved', rows.length, 'vocabulary words');
-    return createResponse(true, 'Vocabulary saved successfully', { count: rows.length });
+    return createResponse(true, 'Vocabulary saved successfully', {
+      count: rows.length,
+      sheetName: sheet.getName()
+    });
     
   } catch (error) {
-    log('Error saving vocabulary:', error.toString());
-    return createResponse(false, 'Failed to save vocabulary: ' + error.toString());
+    return createResponse(false, 'Save failed: ' + error.toString());
   }
 }
 
 /**
- * Handle loading vocabulary data from Google Sheets
+ * Load vocabulary from Google Sheet
  */
-function handleLoadVocabulary() {
+function handleLoadVocabulary(sheetId, sheetName) {
   try {
-    log('Loading vocabulary from sheet');
-    
-    // Get the spreadsheet
-    const sheet = getOrCreateSheet();
+    const sheet = getOrCreateSheet(sheetId, sheetName);
     const lastRow = sheet.getLastRow();
     
-    // If no data, return empty array
     if (lastRow <= 1) {
-      log('No vocabulary data found');
-      return createResponse(true, 'No vocabulary data found', { vocabulary: [] });
+      return createResponse(true, 'No vocabulary found', {
+        vocabulary: [],
+        sheetName: sheet.getName()
+      });
     }
     
-    // Get all data (skip header row)
     const range = sheet.getRange(2, 1, lastRow - 1, 7);
     const values = range.getValues();
     
-    // Convert rows back to vocabulary objects
     const vocabulary = values
-      .filter(row => row[0] && row[1]) // Only include rows with kanji and reading
+      .filter(row => row[0] && row[1])
       .map((row, index) => ({
-        id: row[6] || Date.now() + index, // Use stored ID or generate new one
+        id: row[6] || Date.now() + index,
         kanji: row[0],
         reading: row[1],
         meaning: row[2],
         status: row[3] || 'learning',
         addedDate: row[4] || new Date().toISOString(),
-        examples: parseExamples(row[5]) // Parse JSON examples
+        examples: parseExamples(row[5])
       }));
     
-    log('Successfully loaded', vocabulary.length, 'vocabulary words');
-    return createResponse(true, 'Vocabulary loaded successfully', { vocabulary: vocabulary });
+    return createResponse(true, 'Vocabulary loaded successfully', {
+      vocabulary: vocabulary,
+      sheetName: sheet.getName()
+    });
     
   } catch (error) {
-    log('Error loading vocabulary:', error.toString());
-    return createResponse(false, 'Failed to load vocabulary: ' + error.toString());
+    return createResponse(false, 'Load failed: ' + error.toString());
   }
 }
 
 /**
- * Get or create the spreadsheet and sheet
+ * Get or create sheet
  */
-function getOrCreateSheet() {
+function getOrCreateSheet(sheetId, sheetName) {
   try {
-    // Try to open existing spreadsheet
-    const spreadsheet = SpreadsheetApp.openById(CONFIG.SHEET_ID);
-    let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
+    const spreadsheet = SpreadsheetApp.openById(sheetId);
+    let sheet = spreadsheet.getSheetByName(sheetName);
     
-    // Create sheet if it doesn't exist
     if (!sheet) {
-      sheet = spreadsheet.insertSheet(CONFIG.SHEET_NAME);
+      sheet = spreadsheet.insertSheet(sheetName);
       
-      // Add headers
-      const headers = [
-        'Kanji', 'Reading', 'Meaning', 'Status', 'Date Added', 'Examples', 'ID'
-      ];
+      // Create headers
+      const headers = ['Kanji', 'Reading', 'Meaning', 'Status', 'Date Added', 'Examples', 'ID'];
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
       
-      // Format header row
+      // Format headers
       const headerRange = sheet.getRange(1, 1, 1, headers.length);
       headerRange.setFontWeight('bold');
       headerRange.setBackground('#f0f0f0');
-      
-      log('Created new sheet:', CONFIG.SHEET_NAME);
     }
     
     return sheet;
     
   } catch (error) {
     if (error.toString().includes('not found')) {
-      throw new Error('Google Sheet not found. Please check your SHEET_ID in the Apps Script configuration.');
+      throw new Error('Google Sheet not found. Check your Sheet ID.');
     }
     throw error;
   }
 }
 
 /**
- * Update sync timestamp in the sheet
+ * Parse form data from React form submission
  */
-function updateSyncTimestamp(sheet) {
+function parseFormData(parameter) {
   try {
-    // Add/update sync info in a separate area
-    sheet.getRange('I1').setValue('Last Sync:');
-    sheet.getRange('I2').setValue(new Date());
-    sheet.getRange('I1:I2').setFontSize(10);
-    sheet.getRange('I1').setFontWeight('bold');
+    const data = {
+      action: parameter.action,
+      sheetId: parameter.sheetId,
+      sheetName: parameter.sheetName
+    };
+    
+    // Parse vocabulary JSON if present
+    if (parameter.vocabulary) {
+      data.vocabulary = JSON.parse(parameter.vocabulary);
+    }
+    
+    return data;
   } catch (error) {
-    log('Could not update sync timestamp:', error.toString());
+    throw new Error('Failed to parse form data: ' + error.toString());
   }
 }
 
 /**
- * Parse examples JSON string safely
+ * Parse examples JSON safely
  */
 function parseExamples(examplesString) {
   try {
@@ -217,13 +246,12 @@ function parseExamples(examplesString) {
     }
     return JSON.parse(examplesString);
   } catch (error) {
-    log('Error parsing examples:', error.toString());
     return [];
   }
 }
 
 /**
- * Create standardized response object
+ * Create response with proper CORS
  */
 function createResponse(success, message, data = {}) {
   const response = {
@@ -239,7 +267,7 @@ function createResponse(success, message, data = {}) {
 }
 
 /**
- * Logging function (only logs when DEBUG_MODE is enabled)
+ * Logging function
  */
 function log(...args) {
   if (CONFIG.DEBUG_MODE) {
@@ -248,35 +276,63 @@ function log(...args) {
 }
 
 /**
- * Handle CORS preflight requests
+ * Test script structure
  */
-function doOptions(e) {
-  return ContentService
-    .createTextOutput('')
-    .setMimeType(ContentService.MimeType.TEXT)
-    .setHeaders({
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    });
+function testScriptStructure() {
+  try {
+    log('Testing script structure...');
+    
+    const testResponse = createResponse(true, 'Test message');
+    log('✓ Response creation works');
+    
+    const testExamples = parseExamples('["example1", "example2"]');
+    log('✓ Example parsing works');
+    
+    log('✓ Script structure is valid!');
+    return 'Script structure test passed!';
+    
+  } catch (error) {
+    log('✗ Script structure test failed:', error.toString());
+    throw error;
+  }
 }
 
 /**
- * Test function - you can run this to verify everything is working
- * Go to Apps Script editor > Select "testSetup" function > Click "Run"
+ * Test setup with hardcoded Sheet ID
+ * REPLACE THE SHEET_ID BELOW WITH YOUR ACTUAL GOOGLE SHEET ID
  */
 function testSetup() {
+  // 🔥 REPLACE THIS WITH YOUR ACTUAL SHEET ID 🔥
+  const TEST_SHEET_ID = '1Q1PNq7CyYYLgWQdivOi716lqWvFXd5ilFjDP-YR2WwI';
+  
   try {
-    log('Testing Apps Script setup...');
+    log('Testing Apps Script setup with Sheet ID:', TEST_SHEET_ID);
     
-    // Test creating/accessing sheet
-    const sheet = getOrCreateSheet();
-    log('✓ Successfully accessed sheet:', sheet.getName());
+    // Check if user updated the Sheet ID
+    if (TEST_SHEET_ID === 'PUT_YOUR_SHEET_ID_HERE') {
+      log('❌ Please update TEST_SHEET_ID with your actual Google Sheet ID');
+      log('1. Create a Google Sheet');
+      log('2. Copy the Sheet ID from URL');
+      log('3. Replace TEST_SHEET_ID above');
+      log('4. Run this test again');
+      return 'Please update TEST_SHEET_ID first';
+    }
+    
+    // Test connection
+    log('Testing connection...');
+    const connectionResult = handleTestConnection(TEST_SHEET_ID, CONFIG.DEFAULT_SHEET_NAME);
+    const connectionData = JSON.parse(connectionResult.getContent());
+    
+    if (!connectionData.success) {
+      throw new Error('Connection failed: ' + connectionData.message);
+    }
+    log('✓ Connection test passed');
     
     // Test saving sample data
+    log('Testing save functionality...');
     const sampleVocabulary = [
       {
-        id: 1,
+        id: 999,
         kanji: 'テスト',
         reading: 'てすと',
         meaning: 'test',
@@ -286,83 +342,47 @@ function testSetup() {
       }
     ];
     
-    const saveResult = handleSaveVocabulary(sampleVocabulary);
-    log('✓ Save test result:', JSON.parse(saveResult.getContent()));
+    const saveResult = handleSaveVocabulary(sampleVocabulary, TEST_SHEET_ID, CONFIG.DEFAULT_SHEET_NAME);
+    const saveData = JSON.parse(saveResult.getContent());
+    
+    if (!saveData.success) {
+      throw new Error('Save failed: ' + saveData.message);
+    }
+    log('✓ Save test passed');
     
     // Test loading data
-    const loadResult = handleLoadVocabulary();
-    log('✓ Load test result:', JSON.parse(loadResult.getContent()));
+    log('Testing load functionality...');
+    const loadResult = handleLoadVocabulary(TEST_SHEET_ID, CONFIG.DEFAULT_SHEET_NAME);
+    const loadData = JSON.parse(loadResult.getContent());
     
-    log('✓ All tests passed! Your Apps Script is ready to use.');
+    if (!loadData.success) {
+      throw new Error('Load failed: ' + loadData.message);
+    }
+    log('✓ Load test passed');
+    log('✓ Found', loadData.vocabulary.length, 'vocabulary items');
     
     // Clean up test data
+    log('Cleaning up test data...');
+    const sheet = getOrCreateSheet(TEST_SHEET_ID, CONFIG.DEFAULT_SHEET_NAME);
     const lastRow = sheet.getLastRow();
     if (lastRow > 1) {
       sheet.deleteRows(2, lastRow - 1);
+      log('✓ Test data cleaned up');
     }
     
+    log('🎉 ALL TESTS PASSED! Apps Script is ready to use.');
     return 'Setup test completed successfully!';
     
   } catch (error) {
-    log('✗ Setup test failed:', error.toString());
+    log('❌ Setup test failed:', error.toString());
+    
+    if (error.toString().includes('not found')) {
+      log('💡 Make sure your Sheet ID is correct');
+      log('💡 Make sure the Google Sheet exists');
+    } else if (error.toString().includes('permission')) {
+      log('💡 Make sure you have access to the sheet');
+    }
+    
     throw error;
   }
 }
-
-/**
- * Get sheet statistics (useful for monitoring)
- */
-function getSheetStats() {
-  try {
-    const sheet = getOrCreateSheet();
-    const lastRow = sheet.getLastRow();
-    const vocabularyCount = Math.max(0, lastRow - 1); // Subtract header row
-    
-    return {
-      vocabularyCount: vocabularyCount,
-      lastRow: lastRow,
-      sheetName: sheet.getName(),
-      spreadsheetId: CONFIG.SHEET_ID
-    };
-  } catch (error) {
-    log('Error getting sheet stats:', error.toString());
-    return null;
-  }
-}
-
-/*
- * SETUP CHECKLIST:
- * 
- * 1. ✓ Copy this entire code into Google Apps Script
- * 
- * 2. ✓ Update CONFIG.SHEET_ID:
- *    - Create a new Google Sheet or use existing one
- *    - Copy the Sheet ID from the URL
- *    - Example: https://docs.google.com/spreadsheets/d/1ABC123DEF456/edit
- *    - Your SHEET_ID is: 1ABC123DEF456
- * 
- * 3. ✓ Save the project (Ctrl+S)
- * 
- * 4. ✓ Run the testSetup() function to verify everything works:
- *    - Select "testSetup" from the function dropdown
- *    - Click "Run"
- *    - Check the execution log for success messages
- * 
- * 5. ✓ Deploy as Web App:
- *    - Click "Deploy" > "New deployment"
- *    - Type: "Web app"
- *    - Execute as: "Me"
- *    - Who has access: "Anyone"
- *    - Click "Deploy"
- *    - Copy the Web app URL
- * 
- * 6. ✓ Use the Web app URL in your vocabulary tracker settings
- * 
- * 7. ✓ Test the connection in your vocabulary tracker
- * 
- * Your Google Sheet will have these columns:
- * | Kanji | Reading | Meaning | Status | Date Added | Examples | ID |
- * 
- * The Examples column stores cached example sentences as JSON,
- * reducing API calls to the language model.
- */

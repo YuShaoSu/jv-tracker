@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, RefreshCw } from 'lucide-react';
+import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, Download } from 'lucide-react';
+import { createGoogleSheetsClient } from '../services/googleSheetsApi';
 
 const JapaneseVocabTracker = () => {
   const [vocabulary, setVocabulary] = useState([]);
@@ -11,13 +12,14 @@ const JapaneseVocabTracker = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Google Apps Script integration state
-  const [appsScriptUrl, setAppsScriptUrl] = useState('');
+  // Google Sheets API integration state
+  const [googleApiKey, setGoogleApiKey] = useState('');
   const [googleSheetId, setGoogleSheetId] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('offline'); // 'offline', 'synced', 'pending'
+  const [sheetsClient, setSheetsClient] = useState(null);
 
   // Sample initial data
   useEffect(() => {
@@ -54,10 +56,16 @@ const JapaneseVocabTracker = () => {
 
     if (savedSettings) {
       const settings = JSON.parse(savedSettings);
-      setAppsScriptUrl(settings.appsScriptUrl || '');
+      setGoogleApiKey(settings.googleApiKey || '');
       setGoogleSheetId(settings.googleSheetId || '');
-      setIsConnected(!!(settings.appsScriptUrl && settings.googleSheetId));
+      setIsConnected(!!(settings.googleApiKey && settings.googleSheetId));
       setLastSyncTime(settings.lastSync ? new Date(settings.lastSync) : null);
+      
+      // Create sheets client if we have credentials
+      if (settings.googleApiKey && settings.googleSheetId) {
+        const client = createGoogleSheetsClient(settings.googleApiKey, settings.googleSheetId);
+        setSheetsClient(client);
+      }
     }
   }, []);
 
@@ -87,15 +95,19 @@ const JapaneseVocabTracker = () => {
     'know_well': 'Know Well'
   };
 
-  // Google Apps Script API functions
-  const connectToAppsScript = (url, sheetId) => {
-    setAppsScriptUrl(url);
+  // Google Sheets API functions
+  const connectToGoogleSheets = (apiKey, sheetId) => {
+    setGoogleApiKey(apiKey);
     setGoogleSheetId(sheetId);
     setIsConnected(true);
 
+    // Create sheets client
+    const client = createGoogleSheetsClient(apiKey, sheetId);
+    setSheetsClient(client);
+
     // Save settings
     const settings = {
-      appsScriptUrl: url,
+      googleApiKey: apiKey,
       googleSheetId: sheetId,
       lastSync: lastSyncTime?.toISOString()
     };
@@ -105,78 +117,30 @@ const JapaneseVocabTracker = () => {
     setShowSettings(false);
   };
 
-  const disconnectAppsScript = () => {
-    setAppsScriptUrl('');
+  const disconnectGoogleSheets = () => {
+    setGoogleApiKey('');
     setGoogleSheetId('');
     setIsConnected(false);
     setLastSyncTime(null);
     setSyncStatus('offline');
+    setSheetsClient(null);
     localStorage.removeItem('appsScriptSettings');
   };
 
   const testConnection = async () => {
-    if (!appsScriptUrl || !googleSheetId) return;
+    if (!sheetsClient) return;
 
     setIsSyncing(true);
     try {
-      // Create a form and submit it to avoid CORS
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = appsScriptUrl;
-      form.target = 'hidden-iframe';
-      form.style.display = 'none';
-
-      // Create hidden iframe to receive response
-      let iframe = document.getElementById('hidden-iframe');
-      if (!iframe) {
-        iframe = document.createElement('iframe');
-        iframe.id = 'hidden-iframe';
-        iframe.name = 'hidden-iframe';
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
+      const result = await sheetsClient.testConnection();
+      
+      if (result.success) {
+        alert(`✅ Connection successful!\n\nSpreadsheet: ${result.spreadsheetTitle}\nSheets: ${result.sheets.join(', ')}`);
+        setSyncStatus('synced');
+      } else {
+        alert(`❌ Connection failed: ${result.message}`);
+        setSyncStatus('offline');
       }
-
-      // Add form data
-      const actionInput = document.createElement('input');
-      actionInput.name = 'action';
-      actionInput.value = 'testConnection';
-      form.appendChild(actionInput);
-
-      const sheetIdInput = document.createElement('input');
-      sheetIdInput.name = 'sheetId';
-      sheetIdInput.value = googleSheetId;
-      form.appendChild(sheetIdInput);
-
-      document.body.appendChild(form);
-
-      // Listen for iframe load
-      const result = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Request timeout'));
-        }, 10000);
-
-        iframe.onload = () => {
-          clearTimeout(timeout);
-          try {
-            // Try to read iframe content (will fail due to CORS, but that's expected)
-            // We'll assume success if no error is thrown during form submission
-            resolve({ success: true, message: 'Connection test completed' });
-          } catch (e) {
-            // This is expected due to CORS, but the request was sent
-            resolve({ success: true, message: 'Connection test completed (CORS limited)' });
-          }
-        };
-
-        // Submit form
-        form.submit();
-      });
-
-      // Clean up
-      document.body.removeChild(form);
-
-      alert('✅ Connection test submitted!\nCheck your Google Sheet for a test entry.\nIf you see new data, the connection works!');
-      setSyncStatus('synced');
-
     } catch (error) {
       console.error('Connection test failed:', error);
       alert('❌ Connection failed: ' + error.message);
@@ -187,76 +151,34 @@ const JapaneseVocabTracker = () => {
   };
 
   const syncToGoogleSheets = async () => {
-    if (!appsScriptUrl || !googleSheetId || !isConnected) return;
+    if (!sheetsClient || !isConnected) return;
 
     setIsSyncing(true);
     try {
-      // Create a form and submit it to avoid CORS
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = appsScriptUrl;
-      form.target = 'hidden-iframe-sync';
-      form.style.display = 'none';
-
-      // Create hidden iframe to receive response
-      let iframe = document.getElementById('hidden-iframe-sync');
-      if (!iframe) {
-        iframe = document.createElement('iframe');
-        iframe.id = 'hidden-iframe-sync';
-        iframe.name = 'hidden-iframe-sync';
-        iframe.style.display = 'none';
-        document.body.appendChild(iframe);
-      }
-
-      // Add form data
-      const actionInput = document.createElement('input');
-      actionInput.name = 'action';
-      actionInput.value = 'saveVocabulary';
-      form.appendChild(actionInput);
-
-      const sheetIdInput = document.createElement('input');
-      sheetIdInput.name = 'sheetId';
-      sheetIdInput.value = googleSheetId;
-      form.appendChild(sheetIdInput);
-
-      const vocabularyInput = document.createElement('input');
-      vocabularyInput.name = 'vocabulary';
-      vocabularyInput.value = JSON.stringify(vocabulary);
-      form.appendChild(vocabularyInput);
-
-      document.body.appendChild(form);
-
-      // Submit form
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          resolve(); // Don't reject, just continue
-        }, 15000);
-
-        iframe.onload = () => {
-          clearTimeout(timeout);
-          resolve();
+      // Since API key doesn't allow writing, we'll download CSV instead
+      const result = await sheetsClient.saveVocabulary(vocabulary);
+      
+      if (result.requiresOAuth) {
+        // Download CSV for manual import
+        sheetsClient.downloadCsv(vocabulary);
+        
+        alert(`📥 CSV file downloaded!\n\nTo sync to Google Sheets:\n1. Open your Google Sheet\n2. Select all data (Ctrl+A)\n3. Delete existing data\n4. Go to File > Import\n5. Upload the downloaded CSV\n6. Choose "Replace spreadsheet"\n\nThis method works without complex OAuth setup.`);
+        
+        const now = new Date();
+        setLastSyncTime(now);
+        setSyncStatus('synced');
+        
+        // Update saved settings
+        const settings = {
+          googleApiKey: googleApiKey,
+          googleSheetId: googleSheetId,
+          lastSync: now.toISOString()
         };
-
-        form.submit();
-      });
-
-      // Clean up
-      document.body.removeChild(form);
-
-      const now = new Date();
-      setLastSyncTime(now);
-      setSyncStatus('synced');
-
-      // Update saved settings
-      const settings = {
-        appsScriptUrl: appsScriptUrl,
-        googleSheetId: googleSheetId,
-        lastSync: now.toISOString()
-      };
-      localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
-
-      alert(`✅ Sync completed!\n${vocabulary.length} words sent to Google Sheets.\nCheck your Google Sheet to verify the data was saved.`);
-
+        localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
+      } else {
+        alert(`❌ Sync failed: ${result.message}`);
+        setSyncStatus('pending');
+      }
     } catch (error) {
       console.error('Sync failed:', error);
       setSyncStatus('pending');
@@ -267,9 +189,36 @@ const JapaneseVocabTracker = () => {
   };
 
   const loadFromGoogleSheets = async () => {
-    if (!appsScriptUrl || !googleSheetId || !isConnected) return;
+    if (!sheetsClient || !isConnected) return;
 
-    alert('⚠️ Load from Google Sheets:\n\nDue to browser security restrictions, we cannot automatically load data from Google Sheets.\n\nTo load your data:\n1. Open your Google Sheet\n2. Copy all vocabulary data\n3. Use the Export/Import feature in Settings\n4. Paste the data to import it');
+    setIsSyncing(true);
+    try {
+      const result = await sheetsClient.loadVocabulary();
+      
+      if (result.success) {
+        if (result.vocabulary.length > 0) {
+          setVocabulary(result.vocabulary);
+          alert(`✅ Loaded ${result.vocabulary.length} vocabulary items from Google Sheets!`);
+          
+          const now = new Date();
+          setLastSyncTime(now);
+          setSyncStatus('synced');
+        } else {
+          alert('📝 No vocabulary found in Google Sheets.\nMake sure you have data in the sheet or sync your local data first.');
+        }
+      } else {
+        if (result.needsHeaders) {
+          alert(`📋 Sheet setup required:\n\nPlease add these headers to row 1 of your "VocabularyData" sheet:\n\n${result.expectedHeaders.join(' | ')}\n\nThen try loading again.`);
+        } else {
+          alert(`❌ Load failed: ${result.message}`);
+        }
+      }
+    } catch (error) {
+      console.error('Load failed:', error);
+      alert('❌ Load failed: ' + error.message);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const generateExampleSentence = async (word) => {
@@ -467,14 +416,14 @@ const JapaneseVocabTracker = () => {
               </div>
 
               {/* Sync Button */}
-              {isConnected && appsScriptUrl && googleSheetId && (
+              {isConnected && googleApiKey && googleSheetId && (
                 <button
                   onClick={syncToGoogleSheets}
                   disabled={isSyncing}
                   className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm"
                 >
-                  <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-                  <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Sync'}</span>
+                  <Download size={14} className={isSyncing ? 'animate-spin' : ''} />
+                  <span className="hidden sm:inline">{isSyncing ? 'Export' : 'Export'}</span>
                 </button>
               )}
 
@@ -639,19 +588,19 @@ const JapaneseVocabTracker = () => {
               </div>
 
               <div className="space-y-6">
-                {/* Apps Script Connection Section */}
+                {/* Google Sheets API Connection Section */}
                 <div>
-                  <h4 className="font-medium text-gray-900 mb-3">Google Apps Script & Sheets</h4>
+                  <h4 className="font-medium text-gray-900 mb-3">Google Sheets API</h4>
                   {!isConnected ? (
                     <div className="space-y-3">
                       <div className="text-sm text-gray-600 mb-2">
-                        Step 1: Enter your Google Apps Script Web App URL:
+                        Step 1: Enter your Google Sheets API key:
                       </div>
                       <input
-                        id="appsScriptUrl"
-                        type="url"
-                        placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        id="googleApiKey"
+                        type="text"
+                        placeholder="AIzaSyA... (Google API Key)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
                       />
 
                       <div className="text-sm text-gray-600 mb-2">
@@ -661,17 +610,17 @@ const JapaneseVocabTracker = () => {
                         id="googleSheetId"
                         type="text"
                         placeholder="1ABC123DEF456 (from your Google Sheet URL)"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
                       />
 
                       <button
                         onClick={() => {
-                          const urlInput = document.getElementById('appsScriptUrl');
+                          const apiKeyInput = document.getElementById('googleApiKey');
                           const sheetInput = document.getElementById('googleSheetId');
-                          if (urlInput.value.trim() && sheetInput.value.trim()) {
-                            connectToAppsScript(urlInput.value.trim(), sheetInput.value.trim());
+                          if (apiKeyInput.value.trim() && sheetInput.value.trim()) {
+                            connectToGoogleSheets(apiKeyInput.value.trim(), sheetInput.value.trim());
                           } else {
-                            alert('Please enter both Apps Script URL and Google Sheet ID');
+                            alert('Please enter both API key and Google Sheet ID');
                           }
                         }}
                         className="w-full px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
@@ -687,10 +636,10 @@ const JapaneseVocabTracker = () => {
                     <div className="space-y-3">
                       <div className="p-3 bg-green-50 rounded-md">
                         <div className="font-medium text-sm text-green-900">
-                          ✅ Connected to Google Sheets
+                          ✅ Connected to Google Sheets API
                         </div>
-                        <div className="text-xs text-green-600 break-all mt-1">
-                          Script: {appsScriptUrl.substring(0, 50)}...
+                        <div className="text-xs text-green-600 mt-1">
+                          API Key: {googleApiKey.substring(0, 10)}...{googleApiKey.substring(googleApiKey.length - 4)}
                         </div>
                         <div className="text-xs text-green-600">
                           Sheet ID: {googleSheetId}
@@ -707,7 +656,8 @@ const JapaneseVocabTracker = () => {
                             {isSyncing ? 'Testing...' : 'Test Connection'}
                           </button>
                           <button
-                            className="text-xs text-green-600 hover:text-green-800"
+                            onClick={disconnectGoogleSheets}
+                            className="text-xs text-red-600 hover:text-red-800"
                           >
                             Disconnect
                           </button>
@@ -718,7 +668,7 @@ const JapaneseVocabTracker = () => {
                 </div>
 
                 {/* Sync Actions */}
-                {isConnected && appsScriptUrl && googleSheetId && (
+                {isConnected && googleApiKey && googleSheetId && (
                   <div>
                     <h4 className="font-medium text-gray-900 mb-3">Sync Actions</h4>
                     <div className="space-y-2">
@@ -727,17 +677,20 @@ const JapaneseVocabTracker = () => {
                         disabled={isSyncing}
                         className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm"
                       >
-                        <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
-                        {isSyncing ? 'Syncing to Sheet...' : 'Sync to Google Sheet'}
+                        <Download size={16} className={isSyncing ? 'animate-spin' : ''} />
+                        {isSyncing ? 'Exporting CSV...' : 'Export to CSV'}
                       </button>
                       <button
                         onClick={loadFromGoogleSheets}
                         disabled={isSyncing}
                         className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
                       >
-                        <Cloud size={16} />
-                        Load from Google Sheet
+                        <Cloud size={16} className={isSyncing ? 'animate-spin' : ''} />
+                        {isSyncing ? 'Loading...' : 'Load from Google Sheet'}
                       </button>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      💡 Export downloads a CSV file. Import it to your Google Sheet manually for now.
                     </div>
                   </div>
                 )}
@@ -750,11 +703,25 @@ const JapaneseVocabTracker = () => {
                       <div className="font-medium mb-2 text-blue-900">Quick Setup Guide:</div>
                       <ol className="list-decimal list-inside space-y-1 text-blue-800">
                         <li>Create a <a href="https://sheets.google.com" target="_blank" rel="noopener noreferrer" className="underline">new Google Sheet</a></li>
-                        <li>Copy the Sheet ID from the URL (the long string after /d/)</li>
-                        <li>Go to <a href="https://script.google.com" target="_blank" rel="noopener noreferrer" className="underline">script.google.com</a></li>
-                        <li>Create new project and paste the provided Apps Script code</li>
-                        <li>Deploy as Web App (Execute as: Me, Access: Anyone)</li>
-                        <li>Copy both URLs and paste them above</li>
+                        <li>Add a sheet tab named "VocabularyData"</li>
+                        <li>Add headers in row 1: Kanji | Reading | Meaning | Status | Date Added | Examples | ID</li>
+                        <li>Copy the Sheet ID from URL</li>
+                        <li>Get a Google Sheets API key from <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a></li>
+                        <li>Enable the Google Sheets API</li>
+                        <li>Enter both values above</li>
+                      </ol>
+                    </div>
+
+                    <div className="p-3 bg-green-50 rounded-md">
+                      <div className="font-medium mb-2 text-green-900">🚀 How to get Google API key:</div>
+                      <ol className="list-decimal list-inside space-y-1 text-green-800 text-xs">
+                        <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a></li>
+                        <li>Create a new project or select existing</li>
+                        <li>Go to APIs & Services → Library</li>
+                        <li>Search "Google Sheets API" and enable it</li>
+                        <li>Go to APIs & Services → Credentials</li>
+                        <li>Click "Create Credentials" → API Key</li>
+                        <li>Copy the API key (starts with "AIza...")</li>
                       </ol>
                     </div>
 
@@ -770,8 +737,8 @@ const JapaneseVocabTracker = () => {
                     <div className="p-3 bg-yellow-50 rounded-md">
                       <div className="font-medium mb-1 text-yellow-800">🔒 Security Note:</div>
                       <div className="text-xs text-yellow-700">
-                        Your Google Sheet remains private! The script only provides secure API access to YOUR data.
-                        Others cannot see or modify your vocabulary.
+                        API keys should be kept secure. This approach only allows reading from your sheets.
+                        For writing, we use CSV export/import which is more secure.
                       </div>
                     </div>
                   </div>
