@@ -1,18 +1,148 @@
 /**
  * Google Sheets API Service
- * Direct integration without Apps Script
+ * Direct integration with OAuth support for read/write access
  */
 
 const SHEETS_API_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+const OAUTH_SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
 /**
  * Google Sheets API Client
  */
 export class GoogleSheetsApiClient {
-  constructor(apiKey, spreadsheetId) {
+  constructor(apiKey, spreadsheetId, clientId = null) {
     this.apiKey = apiKey;
     this.spreadsheetId = spreadsheetId;
     this.sheetName = 'VocabularyData';
+    this.clientId = clientId;
+    this.accessToken = null;
+    this.isOAuthAuthenticated = false;
+  }
+
+  /**
+   * Set OAuth client ID for write operations
+   */
+  setClientId(clientId) {
+    this.clientId = clientId;
+  }
+
+  /**
+   * Initialize Google OAuth 2.0
+   */
+  async initializeOAuth() {
+    if (!this.clientId) {
+      throw new Error('OAuth Client ID is required for write operations');
+    }
+
+    try {
+      // Load Google Identity Services library
+      await this.loadGoogleIdentityLibrary();
+      
+      // Initialize Google OAuth
+      window.google.accounts.oauth2.initTokenClient({
+        client_id: this.clientId,
+        scope: OAUTH_SCOPES,
+        callback: (response) => {
+          if (response.access_token) {
+            this.accessToken = response.access_token;
+            this.isOAuthAuthenticated = true;
+          }
+        }
+      });
+
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        message: `OAuth initialization failed: ${error.message}` 
+      };
+    }
+  }
+
+  /**
+   * Load Google Identity Services library
+   */
+  async loadGoogleIdentityLibrary() {
+    if (window.google && window.google.accounts) {
+      return; // Already loaded
+    }
+
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+      document.head.appendChild(script);
+    });
+  }
+
+  /**
+   * Request OAuth permission for write access
+   */
+  async requestWritePermission() {
+    if (!this.clientId) {
+      throw new Error('OAuth Client ID required. Please configure it in settings.');
+    }
+
+    try {
+      await this.initializeOAuth();
+
+      return new Promise((resolve) => {
+        const tokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: this.clientId,
+          scope: OAUTH_SCOPES,
+          callback: (response) => {
+            if (response.access_token) {
+              this.accessToken = response.access_token;
+              this.isOAuthAuthenticated = true;
+              resolve({ success: true, message: 'OAuth permission granted' });
+            } else {
+              resolve({ success: false, message: 'OAuth permission denied' });
+            }
+          }
+        });
+
+        tokenClient.requestAccessToken({
+          prompt: 'consent'
+        });
+      });
+    } catch (error) {
+      return { 
+        success: false, 
+        message: `OAuth request failed: ${error.message}` 
+      };
+    }
+  }
+
+  /**
+   * Make authenticated API request
+   */
+  async makeAuthenticatedRequest(url, options = {}) {
+    if (!this.isOAuthAuthenticated) {
+      throw new Error('OAuth authentication required for this operation');
+    }
+
+    const headers = {
+      'Authorization': `Bearer ${this.accessToken}`,
+      'Content-Type': 'application/json',
+      ...options.headers
+    };
+
+    const response = await fetch(url, {
+      ...options,
+      headers
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        this.isOAuthAuthenticated = false;
+        this.accessToken = null;
+        throw new Error('OAuth token expired. Please re-authenticate.');
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response;
   }
 
   /**
@@ -147,14 +277,111 @@ export class GoogleSheetsApiClient {
 
   /**
    * Save vocabulary to Google Sheets
-   * Note: This requires OAuth, not just API key
+   * Requires OAuth authentication for write access
    */
   async saveVocabulary(vocabulary) {
-    return {
-      success: false,
-      message: 'Saving requires OAuth authentication. Use the export feature instead.',
-      requiresOAuth: true
-    };
+    try {
+      // Check if OAuth is authenticated
+      if (!this.isOAuthAuthenticated) {
+        return {
+          success: false,
+          message: 'OAuth authentication required for direct saving.',
+          requiresOAuth: true
+        };
+      }
+
+      // First ensure sheet is set up
+      const setupResult = await this.ensureSheetSetup();
+      if (!setupResult.success) {
+        return setupResult;
+      }
+
+      // Clear existing data (keep header)
+      await this.clearSheetData();
+
+      // Convert vocabulary to sheets format
+      const rows = vocabulary.map(word => [
+        word.kanji || '',
+        word.reading || '',
+        word.meaning || '',
+        word.status || 'learning',
+        word.addedDate || new Date().toISOString(),
+        JSON.stringify(word.examples || []),
+        word.id || ''
+      ]);
+
+      if (rows.length === 0) {
+        return {
+          success: true,
+          message: 'No vocabulary to save',
+          count: 0
+        };
+      }
+
+      // Write data to sheet
+      const range = `${this.sheetName}!A2:G${rows.length + 1}`;
+      const url = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`;
+
+      const response = await this.makeAuthenticatedRequest(url, {
+        method: 'PUT',
+        body: JSON.stringify({
+          values: rows
+        })
+      });
+
+      const result = await response.json();
+
+      // Add sync timestamp
+      const timestampRange = `${this.sheetName}!I1:I2`;
+      const timestampUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${timestampRange}?valueInputOption=USER_ENTERED`;
+      
+      await this.makeAuthenticatedRequest(timestampUrl, {
+        method: 'PUT',
+        body: JSON.stringify({
+          values: [
+            ['Last Sync:'],
+            [new Date().toISOString()]
+          ]
+        })
+      });
+
+      return {
+        success: true,
+        message: `Successfully saved ${vocabulary.length} vocabulary items to Google Sheets`,
+        count: vocabulary.length,
+        updatedCells: result.updatedCells
+      };
+
+    } catch (error) {
+      if (error.message.includes('OAuth token expired')) {
+        return {
+          success: false,
+          message: 'Authentication expired. Please re-authenticate and try again.',
+          requiresReauth: true
+        };
+      }
+      
+      return {
+        success: false,
+        message: `Save failed: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Clear sheet data while preserving headers
+   */
+  async clearSheetData() {
+    try {
+      // Clear the range
+      const clearUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${this.sheetName}!A2:G1000:clear`;
+      await this.makeAuthenticatedRequest(clearUrl, {
+        method: 'POST'
+      });
+    } catch (error) {
+      // If clearing fails, we'll just overwrite the data
+      console.warn('Failed to clear sheet data:', error.message);
+    }
   }
 
   /**
@@ -254,6 +481,6 @@ export class GoogleSheetsApiClient {
 /**
  * Factory function to create API client
  */
-export function createGoogleSheetsClient(apiKey, spreadsheetId) {
-  return new GoogleSheetsApiClient(apiKey, spreadsheetId);
+export function createGoogleSheetsClient(apiKey, spreadsheetId, clientId = null) {
+  return new GoogleSheetsApiClient(apiKey, spreadsheetId, clientId);
 }

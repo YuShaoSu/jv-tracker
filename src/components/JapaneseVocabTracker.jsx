@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, Download } from 'lucide-react';
+import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, Download, RefreshCw, Shield, Unlock } from 'lucide-react';
 import { createGoogleSheetsClient } from '../services/googleSheetsApi';
 
 const JapaneseVocabTracker = () => {
@@ -15,7 +15,9 @@ const JapaneseVocabTracker = () => {
   // Google Sheets API integration state
   const [googleApiKey, setGoogleApiKey] = useState('');
   const [googleSheetId, setGoogleSheetId] = useState('');
+  const [googleClientId, setGoogleClientId] = useState('');
   const [isConnected, setIsConnected] = useState(false);
+  const [isOAuthAuthenticated, setIsOAuthAuthenticated] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('offline'); // 'offline', 'synced', 'pending'
@@ -58,12 +60,13 @@ const JapaneseVocabTracker = () => {
       const settings = JSON.parse(savedSettings);
       setGoogleApiKey(settings.googleApiKey || '');
       setGoogleSheetId(settings.googleSheetId || '');
+      setGoogleClientId(settings.googleClientId || '');
       setIsConnected(!!(settings.googleApiKey && settings.googleSheetId));
       setLastSyncTime(settings.lastSync ? new Date(settings.lastSync) : null);
       
       // Create sheets client if we have credentials
       if (settings.googleApiKey && settings.googleSheetId) {
-        const client = createGoogleSheetsClient(settings.googleApiKey, settings.googleSheetId);
+        const client = createGoogleSheetsClient(settings.googleApiKey, settings.googleSheetId, settings.googleClientId);
         setSheetsClient(client);
       }
     }
@@ -96,19 +99,21 @@ const JapaneseVocabTracker = () => {
   };
 
   // Google Sheets API functions
-  const connectToGoogleSheets = (apiKey, sheetId) => {
+  const connectToGoogleSheets = (apiKey, sheetId, clientId) => {
     setGoogleApiKey(apiKey);
     setGoogleSheetId(sheetId);
+    setGoogleClientId(clientId);
     setIsConnected(true);
 
     // Create sheets client
-    const client = createGoogleSheetsClient(apiKey, sheetId);
+    const client = createGoogleSheetsClient(apiKey, sheetId, clientId);
     setSheetsClient(client);
 
     // Save settings
     const settings = {
       googleApiKey: apiKey,
       googleSheetId: sheetId,
+      googleClientId: clientId,
       lastSync: lastSyncTime?.toISOString()
     };
     localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
@@ -120,7 +125,9 @@ const JapaneseVocabTracker = () => {
   const disconnectGoogleSheets = () => {
     setGoogleApiKey('');
     setGoogleSheetId('');
+    setGoogleClientId('');
     setIsConnected(false);
+    setIsOAuthAuthenticated(false);
     setLastSyncTime(null);
     setSyncStatus('offline');
     setSheetsClient(null);
@@ -150,19 +157,40 @@ const JapaneseVocabTracker = () => {
     }
   };
 
+  const authenticateForWriteAccess = async () => {
+    if (!sheetsClient || !googleClientId) {
+      alert('⚠️ OAuth Client ID required for write access.\nPlease configure it in settings.');
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const result = await sheetsClient.requestWritePermission();
+      
+      if (result.success) {
+        setIsOAuthAuthenticated(true);
+        setSyncStatus('synced');
+        alert('✅ Authentication successful!\nYou can now sync directly to Google Sheets.');
+      } else {
+        alert(`❌ Authentication failed: ${result.message}`);
+      }
+    } catch (error) {
+      console.error('OAuth failed:', error);
+      alert('❌ Authentication failed: ' + error.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const syncToGoogleSheets = async () => {
     if (!sheetsClient || !isConnected) return;
 
     setIsSyncing(true);
     try {
-      // Since API key doesn't allow writing, we'll download CSV instead
       const result = await sheetsClient.saveVocabulary(vocabulary);
       
-      if (result.requiresOAuth) {
-        // Download CSV for manual import
-        sheetsClient.downloadCsv(vocabulary);
-        
-        alert(`📥 CSV file downloaded!\n\nTo sync to Google Sheets:\n1. Open your Google Sheet\n2. Select all data (Ctrl+A)\n3. Delete existing data\n4. Go to File > Import\n5. Upload the downloaded CSV\n6. Choose "Replace spreadsheet"\n\nThis method works without complex OAuth setup.`);
+      if (result.success) {
+        alert(`✅ Sync completed!\n${result.count} vocabulary items saved to Google Sheets.`);
         
         const now = new Date();
         setLastSyncTime(now);
@@ -172,9 +200,22 @@ const JapaneseVocabTracker = () => {
         const settings = {
           googleApiKey: googleApiKey,
           googleSheetId: googleSheetId,
+          googleClientId: googleClientId,
           lastSync: now.toISOString()
         };
         localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
+      } else if (result.requiresOAuth) {
+        // Fallback to CSV download
+        sheetsClient.downloadCsv(vocabulary);
+        
+        alert(`📥 CSV file downloaded!\n\nFor direct sync, click "Authenticate for Write Access" first.\n\nOr manually import:\n1. Open your Google Sheet\n2. File > Import > Upload CSV\n3. Choose "Replace spreadsheet"`);
+        
+        const now = new Date();
+        setLastSyncTime(now);
+        setSyncStatus('pending');
+      } else if (result.requiresReauth) {
+        setIsOAuthAuthenticated(false);
+        alert(`🔐 Authentication expired.\nPlease click "Authenticate for Write Access" again.`);
       } else {
         alert(`❌ Sync failed: ${result.message}`);
         setSyncStatus('pending');
@@ -420,10 +461,37 @@ const JapaneseVocabTracker = () => {
                 <button
                   onClick={syncToGoogleSheets}
                   disabled={isSyncing}
-                  className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm"
+                  className={`flex items-center gap-1 px-2 sm:px-3 py-1 rounded-md transition-colors disabled:opacity-50 text-sm ${
+                    isOAuthAuthenticated 
+                      ? 'bg-green-500 text-white hover:bg-green-600' 
+                      : 'bg-blue-500 text-white hover:bg-blue-600'
+                  }`}
                 >
-                  <Download size={14} className={isSyncing ? 'animate-spin' : ''} />
-                  <span className="hidden sm:inline">{isSyncing ? 'Export' : 'Export'}</span>
+                  {isOAuthAuthenticated ? (
+                    <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                  ) : (
+                    <Download size={14} className={isSyncing ? 'animate-spin' : ''} />
+                  )}
+                  <span className="hidden sm:inline">
+                    {isSyncing 
+                      ? 'Syncing...' 
+                      : isOAuthAuthenticated 
+                        ? 'Sync' 
+                        : 'Export'
+                    }
+                  </span>
+                </button>
+              )}
+
+              {/* Auth Button */}
+              {isConnected && googleClientId && !isOAuthAuthenticated && (
+                <button
+                  onClick={authenticateForWriteAccess}
+                  disabled={isSyncing}
+                  className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-orange-500 text-white rounded-md hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm"
+                >
+                  <Shield size={14} className={isSyncing ? 'animate-spin' : ''} />
+                  <span className="hidden sm:inline">{isSyncing ? 'Auth...' : 'Auth'}</span>
                 </button>
               )}
 
@@ -613,14 +681,32 @@ const JapaneseVocabTracker = () => {
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
                       />
 
+                      <div className="text-sm text-gray-600 mb-2">
+                        Step 3: Enter OAuth Client ID (optional, for direct sync):
+                      </div>
+                      <input
+                        id="googleClientId"
+                        type="text"
+                        placeholder="123456-abc.apps.googleusercontent.com"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
+                      />
+                      <div className="text-xs text-gray-500 mb-3">
+                        💡 Without Client ID: CSV export only. With Client ID: Direct sync to sheets.
+                      </div>
+
                       <button
                         onClick={() => {
                           const apiKeyInput = document.getElementById('googleApiKey');
                           const sheetInput = document.getElementById('googleSheetId');
+                          const clientInput = document.getElementById('googleClientId');
                           if (apiKeyInput.value.trim() && sheetInput.value.trim()) {
-                            connectToGoogleSheets(apiKeyInput.value.trim(), sheetInput.value.trim());
+                            connectToGoogleSheets(
+                              apiKeyInput.value.trim(), 
+                              sheetInput.value.trim(),
+                              clientInput.value.trim()
+                            );
                           } else {
-                            alert('Please enter both API key and Google Sheet ID');
+                            alert('Please enter at least API key and Google Sheet ID');
                           }
                         }}
                         className="w-full px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
@@ -644,6 +730,16 @@ const JapaneseVocabTracker = () => {
                         <div className="text-xs text-green-600">
                           Sheet ID: {googleSheetId}
                         </div>
+                        {googleClientId && (
+                          <div className="text-xs text-green-600">
+                            OAuth: {googleClientId.substring(0, 15)}...{googleClientId.substring(googleClientId.length - 15)}
+                          </div>
+                        )}
+                        {isOAuthAuthenticated && (
+                          <div className="text-xs text-green-700 font-medium">
+                            🔓 OAuth Authenticated - Direct sync enabled
+                          </div>
+                        )}
                         <div className="text-xs text-green-600 mt-1">
                           {formatLastSync()}
                         </div>
@@ -672,13 +768,34 @@ const JapaneseVocabTracker = () => {
                   <div>
                     <h4 className="font-medium text-gray-900 mb-3">Sync Actions</h4>
                     <div className="space-y-2">
+                      {googleClientId && !isOAuthAuthenticated && (
+                        <button
+                          onClick={authenticateForWriteAccess}
+                          disabled={isSyncing}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600 transition-colors disabled:opacity-50 text-sm"
+                        >
+                          <Unlock size={16} className={isSyncing ? 'animate-spin' : ''} />
+                          {isSyncing ? 'Authenticating...' : 'Authenticate for Write Access'}
+                        </button>
+                      )}
                       <button
                         onClick={syncToGoogleSheets}
                         disabled={isSyncing}
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm"
+                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md transition-colors disabled:opacity-50 text-sm ${
+                          isOAuthAuthenticated 
+                            ? 'bg-green-500 text-white hover:bg-green-600' 
+                            : 'bg-blue-500 text-white hover:bg-blue-600'
+                        }`}
                       >
-                        <Download size={16} className={isSyncing ? 'animate-spin' : ''} />
-                        {isSyncing ? 'Exporting CSV...' : 'Export to CSV'}
+                        {isOAuthAuthenticated ? (
+                          <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
+                        ) : (
+                          <Download size={16} className={isSyncing ? 'animate-spin' : ''} />
+                        )}
+                        {isSyncing 
+                          ? (isOAuthAuthenticated ? 'Syncing to Sheet...' : 'Exporting CSV...')
+                          : (isOAuthAuthenticated ? 'Sync to Google Sheet' : 'Export to CSV')
+                        }
                       </button>
                       <button
                         onClick={loadFromGoogleSheets}
@@ -690,7 +807,11 @@ const JapaneseVocabTracker = () => {
                       </button>
                     </div>
                     <div className="text-xs text-gray-500 mt-2">
-                      💡 Export downloads a CSV file. Import it to your Google Sheet manually for now.
+                      {isOAuthAuthenticated 
+                        ? '🚀 Direct sync enabled! Changes save directly to Google Sheets.' 
+                        : googleClientId
+                          ? '💡 Click "Authenticate" above for direct sync, or use CSV export.'
+                          : '💡 Add OAuth Client ID for direct sync, or use CSV export.'}
                     </div>
                   </div>
                 )}
@@ -701,27 +822,36 @@ const JapaneseVocabTracker = () => {
                   <div className="text-xs text-gray-600 space-y-3">
                     <div className="p-3 bg-blue-50 rounded-md">
                       <div className="font-medium mb-2 text-blue-900">Quick Setup Guide:</div>
-                      <ol className="list-decimal list-inside space-y-1 text-blue-800">
+                      <ol className="list-decimal list-inside space-y-1 text-blue-800 text-xs">
                         <li>Create a <a href="https://sheets.google.com" target="_blank" rel="noopener noreferrer" className="underline">new Google Sheet</a></li>
                         <li>Add a sheet tab named "VocabularyData"</li>
                         <li>Add headers in row 1: Kanji | Reading | Meaning | Status | Date Added | Examples | ID</li>
                         <li>Copy the Sheet ID from URL</li>
-                        <li>Get a Google Sheets API key from <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a></li>
-                        <li>Enable the Google Sheets API</li>
-                        <li>Enter both values above</li>
+                        <li>Get API key from <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a></li>
+                        <li><strong>Optional:</strong> Create OAuth Client ID for direct sync</li>
+                        <li>Enter credentials above</li>
                       </ol>
                     </div>
 
                     <div className="p-3 bg-green-50 rounded-md">
-                      <div className="font-medium mb-2 text-green-900">🚀 How to get Google API key:</div>
+                      <div className="font-medium mb-2 text-green-900">🚀 Get API Key (Required):</div>
                       <ol className="list-decimal list-inside space-y-1 text-green-800 text-xs">
                         <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a></li>
-                        <li>Create a new project or select existing</li>
-                        <li>Go to APIs & Services → Library</li>
-                        <li>Search "Google Sheets API" and enable it</li>
-                        <li>Go to APIs & Services → Credentials</li>
-                        <li>Click "Create Credentials" → API Key</li>
+                        <li>Create project → APIs & Services → Library</li>
+                        <li>Enable "Google Sheets API"</li>
+                        <li>Credentials → "Create Credentials" → API Key</li>
                         <li>Copy the API key (starts with "AIza...")</li>
+                      </ol>
+                    </div>
+
+                    <div className="p-3 bg-orange-50 rounded-md">
+                      <div className="font-medium mb-2 text-orange-900">🔐 Get OAuth Client ID (Optional - for direct sync):</div>
+                      <ol className="list-decimal list-inside space-y-1 text-orange-800 text-xs">
+                        <li>Same project → Credentials → "Create Credentials" → OAuth client ID</li>
+                        <li>Application type: Web application</li>
+                        <li>Authorized JavaScript origins: <code className="bg-orange-200 px-1 rounded">https://jv-tracker.vercel.app</code></li>
+                        <li>Copy Client ID (ends with ".apps.googleusercontent.com")</li>
+                        <li>Without this: CSV export only. With this: Direct sync!</li>
                       </ol>
                     </div>
 
@@ -735,10 +865,12 @@ const JapaneseVocabTracker = () => {
                     </div>
 
                     <div className="p-3 bg-yellow-50 rounded-md">
-                      <div className="font-medium mb-1 text-yellow-800">🔒 Security Note:</div>
-                      <div className="text-xs text-yellow-700">
-                        API keys should be kept secure. This approach only allows reading from your sheets.
-                        For writing, we use CSV export/import which is more secure.
+                      <div className="font-medium mb-1 text-yellow-800">🔒 Security Notes:</div>
+                      <div className="text-xs text-yellow-700 space-y-1">
+                        <div>• <strong>API Key:</strong> Only allows reading your sheets (safe to share)</div>
+                        <div>• <strong>OAuth:</strong> You grant permission directly to Google (secure)</div>
+                        <div>• <strong>Your data:</strong> Only you can access your vocabulary sheets</div>
+                        <div>• <strong>This app:</strong> Runs in your browser, no server storage</div>
                       </div>
                     </div>
                   </div>
