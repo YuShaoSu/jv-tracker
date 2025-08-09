@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, BookOpen, Brain, Eye, RotateCcw, TrendingUp, X, Settings, Cloud, CloudOff, Download, RefreshCw, Shield, Unlock } from 'lucide-react';
 import { createGoogleSheetsClient } from '../services/googleSheetsApi';
+import { exampleGenerator } from '../services/exampleGenerator';
 
 const JapaneseVocabTracker = () => {
   const [vocabulary, setVocabulary] = useState([]);
@@ -22,6 +23,9 @@ const JapaneseVocabTracker = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('offline'); // 'offline', 'synced', 'pending'
   const [sheetsClient, setSheetsClient] = useState(null);
+  
+  // AI Example Generation state
+  const [geminiApiKey, setGeminiApiKey] = useState('');
 
   // Sample initial data
   useEffect(() => {
@@ -63,11 +67,17 @@ const JapaneseVocabTracker = () => {
       setGoogleClientId(settings.googleClientId || '');
       setIsConnected(!!(settings.googleApiKey && settings.googleSheetId));
       setLastSyncTime(settings.lastSync ? new Date(settings.lastSync) : null);
-      
+
       // Create sheets client if we have credentials
       if (settings.googleApiKey && settings.googleSheetId) {
         const client = createGoogleSheetsClient(settings.googleApiKey, settings.googleSheetId, settings.googleClientId);
         setSheetsClient(client);
+      }
+      
+      // Configure example generator with Gemini API key
+      setGeminiApiKey(settings.geminiApiKey || '');
+      if (settings.geminiApiKey) {
+        exampleGenerator.setGeminiApiKey(settings.geminiApiKey);
       }
     }
   }, []);
@@ -99,21 +109,28 @@ const JapaneseVocabTracker = () => {
   };
 
   // Google Sheets API functions
-  const connectToGoogleSheets = (apiKey, sheetId, clientId) => {
+  const connectToGoogleSheets = (apiKey, sheetId, clientId, geminiKey = '') => {
     setGoogleApiKey(apiKey);
     setGoogleSheetId(sheetId);
     setGoogleClientId(clientId);
+    setGeminiApiKey(geminiKey);
     setIsConnected(true);
 
     // Create sheets client
     const client = createGoogleSheetsClient(apiKey, sheetId, clientId);
     setSheetsClient(client);
 
+    // Configure example generator with Gemini API key
+    if (geminiKey) {
+      exampleGenerator.setGeminiApiKey(geminiKey);
+    }
+
     // Save settings
     const settings = {
       googleApiKey: apiKey,
       googleSheetId: sheetId,
       googleClientId: clientId,
+      geminiApiKey: geminiKey,
       lastSync: lastSyncTime?.toISOString()
     };
     localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
@@ -126,11 +143,13 @@ const JapaneseVocabTracker = () => {
     setGoogleApiKey('');
     setGoogleSheetId('');
     setGoogleClientId('');
+    setGeminiApiKey('');
     setIsConnected(false);
     setIsOAuthAuthenticated(false);
     setLastSyncTime(null);
     setSyncStatus('offline');
     setSheetsClient(null);
+    exampleGenerator.setGeminiApiKey(null); // Clear API key from generator
     localStorage.removeItem('appsScriptSettings');
   };
 
@@ -140,7 +159,7 @@ const JapaneseVocabTracker = () => {
     setIsSyncing(true);
     try {
       const result = await sheetsClient.testConnection();
-      
+
       if (result.success) {
         alert(`✅ Connection successful!\n\nSpreadsheet: ${result.spreadsheetTitle}\nSheets: ${result.sheets.join(', ')}`);
         setSyncStatus('synced');
@@ -166,7 +185,7 @@ const JapaneseVocabTracker = () => {
     setIsSyncing(true);
     try {
       const result = await sheetsClient.requestWritePermission();
-      
+
       if (result.success) {
         setIsOAuthAuthenticated(true);
         setSyncStatus('synced');
@@ -188,14 +207,14 @@ const JapaneseVocabTracker = () => {
     setIsSyncing(true);
     try {
       const result = await sheetsClient.saveVocabulary(vocabulary);
-      
+
       if (result.success) {
         alert(`✅ Sync completed!\n${result.count} vocabulary items saved to Google Sheets.`);
-        
+
         const now = new Date();
         setLastSyncTime(now);
         setSyncStatus('synced');
-        
+
         // Update saved settings
         const settings = {
           googleApiKey: googleApiKey,
@@ -207,9 +226,9 @@ const JapaneseVocabTracker = () => {
       } else if (result.requiresOAuth) {
         // Fallback to CSV download
         sheetsClient.downloadCsv(vocabulary);
-        
+
         alert(`📥 CSV file downloaded!\n\nFor direct sync, click "Authenticate for Write Access" first.\n\nOr manually import:\n1. Open your Google Sheet\n2. File > Import > Upload CSV\n3. Choose "Replace spreadsheet"`);
-        
+
         const now = new Date();
         setLastSyncTime(now);
         setSyncStatus('pending');
@@ -235,12 +254,12 @@ const JapaneseVocabTracker = () => {
     setIsSyncing(true);
     try {
       const result = await sheetsClient.loadVocabulary();
-      
+
       if (result.success) {
         if (result.vocabulary.length > 0) {
           setVocabulary(result.vocabulary);
           alert(`✅ Loaded ${result.vocabulary.length} vocabulary items from Google Sheets!`);
-          
+
           const now = new Date();
           setLastSyncTime(now);
           setSyncStatus('synced');
@@ -262,7 +281,7 @@ const JapaneseVocabTracker = () => {
     }
   };
 
-  const generateExampleSentence = async (word) => {
+  const handleGenerateExample = async (word) => {
     // Check if we already have cached examples
     if (word.examples && word.examples.length > 0) {
       const randomExample = word.examples[Math.floor(Math.random() * word.examples.length)];
@@ -272,39 +291,30 @@ const JapaneseVocabTracker = () => {
 
     setIsGenerating(true);
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 200,
-          messages: [
-            {
-              role: "user",
-              content: `Generate a simple Japanese example sentence using the word "${word.kanji}" (${word.reading}) which means "${word.meaning}". Please provide the sentence in Japanese with hiragana/katakana readings in parentheses, followed by an English translation. Keep it beginner-friendly.`
-            }
-          ]
-        })
+      // Use the ExampleGenerator service
+      const result = await exampleGenerator.generateExample(word, {
+        useAI: !!geminiApiKey, // Enable AI only if API key is configured
+        simulateDelay: true
       });
 
-      const data = await response.json();
-      const sentence = data.content[0].text;
-      setGeneratedSentence(sentence);
+      if (result.success) {
+        setGeneratedSentence(result.example);
 
-      // Cache the example sentence
-      const updatedVocabulary = vocabulary.map(w => {
-        if (w.id === word.id) {
-          const updatedExamples = [...(w.examples || []), sentence];
-          return { ...w, examples: updatedExamples };
-        }
-        return w;
-      });
-      setVocabulary(updatedVocabulary);
-
+        // Cache the example sentence
+        const updatedVocabulary = vocabulary.map(w => {
+          if (w.id === word.id) {
+            const updatedExamples = [...(w.examples || []), result.example];
+            return { ...w, examples: updatedExamples };
+          }
+          return w;
+        });
+        setVocabulary(updatedVocabulary);
+      } else {
+        setGeneratedSentence('Sorry, could not generate example sentence at this time.');
+      }
     } catch (error) {
       setGeneratedSentence('Sorry, could not generate example sentence at this time.');
+      console.error('Example generation failed:', error);
     } finally {
       setIsGenerating(false);
     }
@@ -429,7 +439,7 @@ const JapaneseVocabTracker = () => {
         onClick={() => {
           setSelectedWord(word);
           setShowExampleSentence(true);
-          generateExampleSentence(word);
+          handleGenerateExample(word);
         }}
         className="w-full py-2 px-3 sm:px-4 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center gap-2 text-sm sm:text-base"
       >
@@ -461,11 +471,10 @@ const JapaneseVocabTracker = () => {
                 <button
                   onClick={syncToGoogleSheets}
                   disabled={isSyncing}
-                  className={`flex items-center gap-1 px-2 sm:px-3 py-1 rounded-md transition-colors disabled:opacity-50 text-sm ${
-                    isOAuthAuthenticated 
-                      ? 'bg-green-500 text-white hover:bg-green-600' 
+                  className={`flex items-center gap-1 px-2 sm:px-3 py-1 rounded-md transition-colors disabled:opacity-50 text-sm ${isOAuthAuthenticated
+                      ? 'bg-green-500 text-white hover:bg-green-600'
                       : 'bg-blue-500 text-white hover:bg-blue-600'
-                  }`}
+                    }`}
                 >
                   {isOAuthAuthenticated ? (
                     <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
@@ -473,10 +482,10 @@ const JapaneseVocabTracker = () => {
                     <Download size={14} className={isSyncing ? 'animate-spin' : ''} />
                   )}
                   <span className="hidden sm:inline">
-                    {isSyncing 
-                      ? 'Syncing...' 
-                      : isOAuthAuthenticated 
-                        ? 'Sync' 
+                    {isSyncing
+                      ? 'Syncing...'
+                      : isOAuthAuthenticated
+                        ? 'Sync'
                         : 'Export'
                     }
                   </span>
@@ -512,8 +521,8 @@ const JapaneseVocabTracker = () => {
             <button
               onClick={() => setCurrentView('dashboard')}
               className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === 'dashboard'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               <TrendingUp size={18} className="sm:w-5 sm:h-5" />
@@ -522,8 +531,8 @@ const JapaneseVocabTracker = () => {
             <button
               onClick={() => setCurrentView('vocabulary')}
               className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === 'vocabulary'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               <BookOpen size={18} className="sm:w-5 sm:h-5" />
@@ -534,8 +543,8 @@ const JapaneseVocabTracker = () => {
             <button
               onClick={() => setCurrentView('review')}
               className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === 'review'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               <RotateCcw size={18} className="sm:w-5 sm:h-5" />
@@ -694,16 +703,31 @@ const JapaneseVocabTracker = () => {
                         💡 Without Client ID: CSV export only. With Client ID: Direct sync to sheets.
                       </div>
 
+                      <div className="text-sm text-gray-600 mb-2">
+                        Step 4: Enter Gemini API key (optional, for AI example generation):
+                      </div>
+                      <input
+                        id="geminiApiKey"
+                        type="text"
+                        placeholder="AIzaSyB... (Google AI Studio API Key)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
+                      />
+                      <div className="text-xs text-gray-500 mb-3">
+                        🤖 Enables AI-powered Japanese example sentence generation
+                      </div>
+
                       <button
                         onClick={() => {
                           const apiKeyInput = document.getElementById('googleApiKey');
                           const sheetInput = document.getElementById('googleSheetId');
                           const clientInput = document.getElementById('googleClientId');
+                          const geminiInput = document.getElementById('geminiApiKey');
                           if (apiKeyInput.value.trim() && sheetInput.value.trim()) {
                             connectToGoogleSheets(
-                              apiKeyInput.value.trim(), 
+                              apiKeyInput.value.trim(),
                               sheetInput.value.trim(),
-                              clientInput.value.trim()
+                              clientInput.value.trim(),
+                              geminiInput.value.trim()
                             );
                           } else {
                             alert('Please enter at least API key and Google Sheet ID');
@@ -733,6 +757,11 @@ const JapaneseVocabTracker = () => {
                         {googleClientId && (
                           <div className="text-xs text-green-600">
                             OAuth: {googleClientId.substring(0, 15)}...{googleClientId.substring(googleClientId.length - 15)}
+                          </div>
+                        )}
+                        {geminiApiKey && (
+                          <div className="text-xs text-purple-600">
+                            🤖 Gemini AI: {geminiApiKey.substring(0, 10)}...{geminiApiKey.substring(geminiApiKey.length - 4)}
                           </div>
                         )}
                         {isOAuthAuthenticated && (
@@ -781,18 +810,17 @@ const JapaneseVocabTracker = () => {
                       <button
                         onClick={syncToGoogleSheets}
                         disabled={isSyncing}
-                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md transition-colors disabled:opacity-50 text-sm ${
-                          isOAuthAuthenticated 
-                            ? 'bg-green-500 text-white hover:bg-green-600' 
+                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md transition-colors disabled:opacity-50 text-sm ${isOAuthAuthenticated
+                            ? 'bg-green-500 text-white hover:bg-green-600'
                             : 'bg-blue-500 text-white hover:bg-blue-600'
-                        }`}
+                          }`}
                       >
                         {isOAuthAuthenticated ? (
                           <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
                         ) : (
                           <Download size={16} className={isSyncing ? 'animate-spin' : ''} />
                         )}
-                        {isSyncing 
+                        {isSyncing
                           ? (isOAuthAuthenticated ? 'Syncing to Sheet...' : 'Exporting CSV...')
                           : (isOAuthAuthenticated ? 'Sync to Google Sheet' : 'Export to CSV')
                         }
@@ -807,8 +835,8 @@ const JapaneseVocabTracker = () => {
                       </button>
                     </div>
                     <div className="text-xs text-gray-500 mt-2">
-                      {isOAuthAuthenticated 
-                        ? '🚀 Direct sync enabled! Changes save directly to Google Sheets.' 
+                      {isOAuthAuthenticated
+                        ? '🚀 Direct sync enabled! Changes save directly to Google Sheets.'
                         : googleClientId
                           ? '💡 Click "Authenticate" above for direct sync, or use CSV export.'
                           : '💡 Add OAuth Client ID for direct sync, or use CSV export.'}
@@ -852,6 +880,17 @@ const JapaneseVocabTracker = () => {
                         <li>Authorized JavaScript origins: <code className="bg-orange-200 px-1 rounded">https://jv-tracker.vercel.app</code></li>
                         <li>Copy Client ID (ends with ".apps.googleusercontent.com")</li>
                         <li>Without this: CSV export only. With this: Direct sync!</li>
+                      </ol>
+                    </div>
+
+                    <div className="p-3 bg-purple-50 rounded-md">
+                      <div className="font-medium mb-2 text-purple-900">🤖 Get Gemini API Key (Optional - for AI examples):</div>
+                      <ol className="list-decimal list-inside space-y-1 text-purple-800 text-xs">
+                        <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline">Google AI Studio</a></li>
+                        <li>Sign in with your Google account</li>
+                        <li>Click "Create API Key"</li>
+                        <li>Copy the API key (starts with "AIzaSy...")</li>
+                        <li>With this: AI generates contextual Japanese example sentences!</li>
                       </ol>
                     </div>
 
@@ -998,7 +1037,7 @@ const JapaneseVocabTracker = () => {
 
               <div className="flex flex-col sm:flex-row gap-3 mt-4 sm:mt-6">
                 <button
-                  onClick={() => generateExampleSentence(selectedWord)}
+                  onClick={() => handleGenerateExample(selectedWord)}
                   disabled={isGenerating}
                   className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm sm:text-base"
                 >
