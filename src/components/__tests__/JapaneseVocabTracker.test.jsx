@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { default as userEvent } from '@testing-library/user-event';
+import userEvent from '@testing-library/user-event';
 import JapaneseVocabTracker from '../JapaneseVocabTracker';
 import * as googleSheetsApi from '../../services/googleSheetsApi';
 import * as exampleGenerator from '../../services/exampleGenerator';
@@ -101,7 +101,7 @@ describe('JapaneseVocabTracker', () => {
     // Check navigation tabs
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
     expect(screen.getAllByText(/Vocabulary/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Review/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Review/ })).toBeInTheDocument();
   });
 
   test('displays sample vocabulary data on initial load', () => {
@@ -141,7 +141,7 @@ describe('JapaneseVocabTracker', () => {
     }
     
     // Click on Review tab
-    await user.click(screen.getByText(/Review/));
+    await user.click(screen.getByRole('button', { name: /Review/ }));
     expect(screen.getByText('Words to Review')).toBeInTheDocument();
   });
 
@@ -298,8 +298,7 @@ describe('JapaneseVocabTracker', () => {
       expect(googleSheetsApi.createGoogleSheetsClient).toHaveBeenCalledWith(
         'AIzaSyA_TEST_API_KEY_12345678901234567890',
         '1ABC123DEF456GHI789JKL012MNO345PQR678STU901VWX',
-        '123456-abc.apps.googleusercontent.com',
-        'AIzaSyB_TEST_GEMINI_KEY_12345678901234567890'
+        '123456-abc.apps.googleusercontent.com'
       );
     });
   });
@@ -387,7 +386,7 @@ describe('JapaneseVocabTracker', () => {
     await user.click(oftenForgetButton);
     
     // Navigate to review tab
-    await user.click(screen.getByText(/Review/));
+    await user.click(screen.getByRole('button', { name: /Review/ }));
     
     // Should show words to review
     expect(screen.getByText('Words to Review')).toBeInTheDocument();
