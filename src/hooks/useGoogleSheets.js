@@ -15,7 +15,7 @@ export const useGoogleSheets = () => {
   // Load settings from localStorage on mount
   useEffect(() => {
     const savedSettings = localStorage.getItem('appsScriptSettings');
-    
+
     if (savedSettings) {
       const settings = JSON.parse(savedSettings);
       setGoogleApiKey(settings.googleApiKey || '');
@@ -64,6 +64,7 @@ export const useGoogleSheets = () => {
     setSyncStatus('offline');
     setSheetsClient(null);
     localStorage.removeItem('appsScriptSettings');
+    localStorage.removeItem('vocabularySyncHash'); // Clean up sync hash
   };
 
   const testConnection = async () => {
@@ -128,6 +129,10 @@ export const useGoogleSheets = () => {
         setLastSyncTime(now);
         setSyncStatus('synced');
 
+        // Store vocabulary hash for future comparison
+        const vocabularyHash = generateVocabularyHash(vocabulary);
+        storeSyncHash(vocabularyHash);
+
         // Update saved settings
         const settings = {
           googleApiKey: googleApiKey,
@@ -145,6 +150,10 @@ export const useGoogleSheets = () => {
         const now = new Date();
         setLastSyncTime(now);
         setSyncStatus('pending');
+
+        // Store vocabulary hash for CSV export (since it's exported but not directly synced)
+        const vocabularyHash = generateVocabularyHash(vocabulary);
+        storeSyncHash(vocabularyHash);
       } else if (result.requiresReauth) {
         setIsOAuthAuthenticated(false);
         alert(`🔐 Authentication expired.\nPlease click "Authenticate for Write Access" again.`);
@@ -176,6 +185,10 @@ export const useGoogleSheets = () => {
           const now = new Date();
           setLastSyncTime(now);
           setSyncStatus('synced');
+
+          // Store vocabulary hash after loading from sheets
+          const vocabularyHash = generateVocabularyHash(result.vocabulary);
+          storeSyncHash(vocabularyHash);
         } else {
           alert('📝 No vocabulary found in Google Sheets.\nMake sure you have data in the sheet or sync your local data first.');
         }
@@ -215,9 +228,72 @@ export const useGoogleSheets = () => {
     return `${days}d ago`;
   };
 
+  // Generate a hash from vocabulary data for comparison
+  const generateVocabularyHash = (vocabulary) => {
+    if (!vocabulary || vocabulary.length === 0) return '';
+
+    // Normalize vocabulary data for consistent hashing
+    const normalizedData = vocabulary
+      .map(word => ({
+        id: word.id,
+        kanji: word.kanji || '',
+        reading: word.reading || '',
+        meaning: word.meaning || '',
+        status: word.status || '',
+        addedDate: word.addedDate || '',
+        examples: (word.examples || []).sort() // Sort examples for consistency
+      }))
+      .sort((a, b) => a.id - b.id); // Sort by ID for consistency
+
+    // Simple hash function (djb2 algorithm)
+    const str = JSON.stringify(normalizedData);
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    }
+    return hash.toString();
+  };
+
+  // Get stored sync hash
+  const getStoredSyncHash = () => {
+    try {
+      const stored = localStorage.getItem('vocabularySyncHash');
+      return stored || '';
+    } catch (error) {
+      console.error('Failed to get sync hash:', error);
+      return '';
+    }
+  };
+
+  // Store sync hash
+  const storeSyncHash = (hash) => {
+    try {
+      localStorage.setItem('vocabularySyncHash', hash);
+    } catch (error) {
+      console.error('Failed to store sync hash:', error);
+    }
+  };
+
   // Update sync status when vocabulary changes
-  const updateSyncStatus = () => {
-    if (lastSyncTime) {
+  const updateSyncStatus = (currentVocabulary) => {
+    if (!isConnected || !lastSyncTime) {
+      setSyncStatus('offline');
+      return;
+    }
+
+    // If already pending, no need to check hash again
+    if (syncStatus === 'pending') {
+      return;
+    }
+
+    // Generate hash of current vocabulary
+    const currentHash = generateVocabularyHash(currentVocabulary);
+    const storedHash = getStoredSyncHash();
+
+    // Compare hashes to determine sync status
+    if (currentHash === storedHash && storedHash !== '') {
+      setSyncStatus('synced');
+    } else {
       setSyncStatus('pending');
     }
   };

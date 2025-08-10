@@ -32,7 +32,7 @@ const JapaneseVocabTracker = () => {
 
   // Update sync status when vocabulary changes
   useEffect(() => {
-    updateSyncStatus();
+    updateSyncStatus(vocabulary);
   }, [vocabulary, updateSyncStatus]);
 
   const statusCounts = getStatusCounts();
@@ -83,8 +83,8 @@ const JapaneseVocabTracker = () => {
                   onClick={handleSyncToSheets}
                   disabled={isSyncing}
                   className={`flex items-center gap-1 px-2 sm:px-3 py-1 rounded-md transition-colors disabled:opacity-50 text-sm ${googleSheetsHook.isOAuthAuthenticated
-                      ? 'bg-green-500 text-white hover:bg-green-600'
-                      : 'bg-blue-500 text-white hover:bg-blue-600'
+                    ? 'bg-green-500 text-white hover:bg-green-600'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
                     }`}
                 >
                   {googleSheetsHook.isOAuthAuthenticated ? (
