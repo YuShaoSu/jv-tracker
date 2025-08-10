@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, TrendingUp, RotateCcw, Settings, Cloud, CloudOff, Download, RefreshCw, Shield } from 'lucide-react';
+import { BookOpen, TrendingUp, RotateCcw, Settings, Cloud, CloudOff, Download, RefreshCw, Shield, GraduationCap } from 'lucide-react';
 
 import { useVocabulary } from '../hooks/useVocabulary';
 import { useGoogleSheets } from '../hooks/useGoogleSheets';
@@ -8,6 +8,7 @@ import { useExampleGeneration } from '../hooks/useExampleGeneration';
 import DashboardView from './DashboardView';
 import VocabularyView from './VocabularyView';
 import ReviewView from './ReviewView';
+import LearnView from './LearnView';
 import SettingsModal from './SettingsModal';
 import AddWordModal from './AddWordModal';
 import ExampleSentenceModal from './ExampleSentenceModal';
@@ -152,6 +153,17 @@ const JapaneseVocabTracker = () => {
               <span>({vocabulary.length})</span>
             </button>
             <button
+              onClick={() => setCurrentView(VIEWS.LEARN)}
+              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === VIEWS.LEARN
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-600 hover:text-gray-900'
+                }`}
+            >
+              <GraduationCap size={18} className="sm:w-5 sm:h-5" />
+              <span className="hidden sm:inline">Learn</span>
+              <span className="sm:hidden">Study</span>
+            </button>
+            <button
               onClick={() => setCurrentView(VIEWS.REVIEW)}
               className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-6 py-3 sm:py-4 font-medium whitespace-nowrap text-sm sm:text-base ${currentView === VIEWS.REVIEW
                 ? 'text-blue-600 border-b-2 border-blue-600'
@@ -182,6 +194,13 @@ const JapaneseVocabTracker = () => {
             onDeleteWord={deleteWord}
             onUpdateWordStatus={updateWordStatus}
             onShowExample={handleShowExample}
+          />
+        )}
+
+        {currentView === VIEWS.LEARN && (
+          <LearnView
+            vocabulary={vocabulary}
+            onUpdateWordStatus={updateWordStatus}
           />
         )}
 

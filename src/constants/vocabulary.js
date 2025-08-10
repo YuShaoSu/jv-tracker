@@ -19,5 +19,6 @@ export const SYNC_STATUS = {
 export const VIEWS = {
   DASHBOARD: 'dashboard',
   VOCABULARY: 'vocabulary',
-  REVIEW: 'review'
+  REVIEW: 'review',
+  LEARN: 'learn'
 };

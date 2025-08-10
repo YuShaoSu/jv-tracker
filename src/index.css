@@ -21,6 +21,10 @@ code {
   font-family: 'Noto Sans JP', sans-serif;
 }
 
+.font-japanese {
+  font-family: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', sans-serif;
+}
+
 /* Custom scrollbar for better mobile experience */
 ::-webkit-scrollbar {
   width: 6px;
