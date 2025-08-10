@@ -10,6 +10,7 @@ const SettingsModal = ({
   onLoadFromSheets
 }) => {
   const [activeTab, setActiveTab] = useState('connection');
+  const [setupMode, setSetupMode] = useState('oauth'); // 'oauth' or 'apikey'
   
   const {
     googleApiKey,
@@ -89,25 +90,78 @@ const SettingsModal = ({
               </div>
 
               {!isConnected ? (
-                <div className="space-y-4">
-                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">1</div>
-                      <h5 className="font-medium text-blue-900">Google Sheets API Key</h5>
+                <div className="space-y-6">
+                  {/* Setup Mode Selection */}
+                  <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg border border-blue-200">
+                    <h5 className="font-medium text-gray-900 mb-3">Choose Setup Method</h5>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        onClick={() => setSetupMode('oauth')}
+                        className={`p-4 rounded-lg border-2 transition-all text-left ${
+                          setupMode === 'oauth' 
+                            ? 'border-blue-500 bg-blue-50' 
+                            : 'border-gray-200 bg-white hover:border-blue-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <CheckCircle2 size={20} className={setupMode === 'oauth' ? 'text-blue-600' : 'text-gray-400'} />
+                          <span className="font-medium text-gray-900">OAuth Only</span>
+                          <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Recommended</span>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-2">Simplest setup - just authenticate with Google</p>
+                        <ul className="text-xs text-gray-500 space-y-1">
+                          <li>✅ No API key needed</li>
+                          <li>✅ Full read/write access</li>
+                          <li>✅ Most secure</li>
+                        </ul>
+                      </button>
+                      
+                      <button
+                        onClick={() => setSetupMode('apikey')}
+                        className={`p-4 rounded-lg border-2 transition-all text-left ${
+                          setupMode === 'apikey' 
+                            ? 'border-orange-500 bg-orange-50' 
+                            : 'border-gray-200 bg-white hover:border-orange-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <Settings size={20} className={setupMode === 'apikey' ? 'text-orange-600' : 'text-gray-400'} />
+                          <span className="font-medium text-gray-900">API Key + OAuth</span>
+                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">Advanced</span>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-2">Traditional setup with API key + OAuth</p>
+                        <ul className="text-xs text-gray-500 space-y-1">
+                          <li>⚠️ Requires API key setup</li>
+                          <li>✅ Works without auth initially</li>
+                          <li>✅ Backward compatible</li>
+                        </ul>
+                      </button>
                     </div>
-                    <p className="text-sm text-blue-700 mb-3">Required to read your spreadsheets</p>
-                    <input
-                      id="googleApiKey"
-                      type="password"
-                      placeholder="AIzaSyA... (Google API Key)"
-                      className="w-full px-3 py-2.5 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono bg-white"
-                    />
                   </div>
+
+                <div className="space-y-4">
+                  {setupMode === 'apikey' && (
+                    <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">1</div>
+                        <h5 className="font-medium text-blue-900">Google Sheets API Key</h5>
+                        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">Optional with OAuth</span>
+                      </div>
+                      <p className="text-sm text-blue-700 mb-3">For read access without authentication</p>
+                      <input
+                        id="googleApiKey"
+                        type="password"
+                        placeholder="AIzaSyA... (Google API Key)"
+                        className="w-full px-3 py-2.5 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono bg-white"
+                      />
+                    </div>
+                  )}
 
                   <div className="bg-green-50 p-4 rounded-lg border border-green-200">
                     <div className="flex items-center gap-2 mb-2">
-                      <div className="w-6 h-6 bg-green-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">2</div>
+                      <div className="w-6 h-6 bg-green-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">{setupMode === 'oauth' ? '1' : '2'}</div>
                       <h5 className="font-medium text-green-900">Google Sheet ID</h5>
+                      <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Required</span>
                     </div>
                     <p className="text-sm text-green-700 mb-3">Found in your Google Sheet URL</p>
                     <input
@@ -121,22 +175,32 @@ const SettingsModal = ({
                   <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
                     <div className="flex items-center justify-between gap-2 mb-2">
                       <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 bg-orange-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">3</div>
-                        <h5 className="font-medium text-orange-900">OAuth Client ID</h5>
+                        <div className="w-6 h-6 bg-orange-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">{setupMode === 'oauth' ? '2' : '3'}</div>
+                        <h5 className="font-medium text-orange-900">OAuth Authentication</h5>
                       </div>
                       <div className="flex items-center gap-2 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs">
                         <CheckCircle2 size={12} />
                         <span>Built-in</span>
                       </div>
                     </div>
-                    <p className="text-sm text-orange-700 mb-3">Pre-configured for direct sync to Google Sheets 🚀</p>
+                    <p className="text-sm text-orange-700 mb-3">
+                      {setupMode === 'oauth' 
+                        ? 'Authenticate with Google for full access to your sheets ✨' 
+                        : 'Pre-configured OAuth client for direct sync 🚀'
+                      }
+                    </p>
                     <div className="bg-white p-3 rounded-md border border-orange-300">
-                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">OAuth Client ID</div>
+                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                        {setupMode === 'oauth' ? 'Authentication Method' : 'OAuth Client ID'}
+                      </div>
                       <div className="text-sm font-mono text-gray-700 break-all">
-                        {isOAuthConfigured() ? GOOGLE_OAUTH_CLIENT_ID : '⚠️ OAuth not configured'}
+                        {setupMode === 'oauth' 
+                          ? 'Google OAuth 2.0 - No API key needed!' 
+                          : (isOAuthConfigured() ? GOOGLE_OAUTH_CLIENT_ID : '⚠️ OAuth not configured')
+                        }
                       </div>
                       {isOAuthConfigured() && (
-                        <div className="text-xs text-green-600 mt-2">✅ Ready for direct sync</div>
+                        <div className="text-xs text-green-600 mt-2">✅ Ready for {setupMode === 'oauth' ? 'OAuth-only access' : 'direct sync'}</div>
                       )}
                     </div>
                   </div>
@@ -157,29 +221,46 @@ const SettingsModal = ({
                     />
                   </div>
 
+                  </div>
+
                   <button
                     onClick={() => {
                       const apiKeyInput = document.getElementById('googleApiKey');
                       const sheetInput = document.getElementById('googleSheetId');
                       const geminiInput = document.getElementById('geminiApiKey');
-                      if (apiKeyInput.value.trim() && sheetInput.value.trim()) {
-                        // OAuth Client ID is now hard-coded, no need to get from input
-                        connectToGoogleSheets(
-                          apiKeyInput.value.trim(),
-                          sheetInput.value.trim()
-                        );
-                        // Handle Gemini API key separately through the example hook
-                        if (geminiInput.value.trim()) {
-                          exampleHook.updateGeminiApiKey(geminiInput.value.trim());
+                      
+                      const sheetId = sheetInput?.value.trim();
+                      const apiKey = apiKeyInput?.value.trim();
+                      
+                      if (setupMode === 'oauth') {
+                        // OAuth-only mode: only need Sheet ID
+                        if (sheetId) {
+                          connectToGoogleSheets(null, sheetId, null, true); // OAuth-only mode
+                          if (geminiInput?.value.trim()) {
+                            exampleHook.updateGeminiApiKey(geminiInput.value.trim());
+                          }
+                          setActiveTab('sync');
+                        } else {
+                          alert('Please enter your Google Sheet ID');
                         }
-                        setActiveTab('sync'); // Switch to sync tab after connection
                       } else {
-                        alert('Please enter at least API key and Google Sheet ID');
+                        // Traditional mode: need API key + Sheet ID
+                        if (apiKey && sheetId) {
+                          connectToGoogleSheets(apiKey, sheetId, null, false);
+                          if (geminiInput?.value.trim()) {
+                            exampleHook.updateGeminiApiKey(geminiInput.value.trim());
+                          }
+                          setActiveTab('sync');
+                        } else {
+                          alert('Please enter both API key and Google Sheet ID');
+                        }
                       }
                     }}
-                    className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-base shadow-md"
+                    className={`w-full px-6 py-3 text-white rounded-lg hover:opacity-90 transition-colors font-medium text-base shadow-md ${
+                      setupMode === 'oauth' ? 'bg-purple-600' : 'bg-blue-600'
+                    }`}
                   >
-                    🚀 Connect to Google Sheets
+                    {setupMode === 'oauth' ? '✨ Setup OAuth-Only Access' : '🚀 Connect to Google Sheets'}
                   </button>
 
                   <div className="text-center">
@@ -200,22 +281,29 @@ const SettingsModal = ({
                   </div>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                    <div className="bg-white p-3 rounded-lg border border-green-200">
-                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">API Key</div>
-                      <div className="text-sm font-mono text-gray-700">
-                        {googleApiKey.substring(0, 10)}...{googleApiKey.substring(googleApiKey.length - 4)}
+                    {googleApiKey && (
+                      <div className="bg-white p-3 rounded-lg border border-green-200">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">API Key</div>
+                        <div className="text-sm font-mono text-gray-700">
+                          {googleApiKey.substring(0, 10)}...{googleApiKey.substring(googleApiKey.length - 4)}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div className="bg-white p-3 rounded-lg border border-green-200">
                       <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Sheet ID</div>
                       <div className="text-sm font-mono text-gray-700 truncate">{googleSheetId}</div>
                     </div>
                     <div className="bg-white p-3 rounded-lg border border-orange-200">
-                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">OAuth Client</div>
+                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                        {googleApiKey ? 'OAuth Client' : 'Authentication Method'}
+                      </div>
                       <div className="text-sm font-mono text-gray-700 truncate">
-                        {isOAuthConfigured() ? 
-                          `${GOOGLE_OAUTH_CLIENT_ID.substring(0, 15)}...${GOOGLE_OAUTH_CLIENT_ID.substring(GOOGLE_OAUTH_CLIENT_ID.length - 15)}` :
-                          '⚠️ Not configured'
+                        {googleApiKey ? 
+                          (isOAuthConfigured() ? 
+                            `${GOOGLE_OAUTH_CLIENT_ID.substring(0, 15)}...${GOOGLE_OAUTH_CLIENT_ID.substring(GOOGLE_OAUTH_CLIENT_ID.length - 15)}` :
+                            '⚠️ Not configured'
+                          ) : 
+                          '✨ OAuth-Only Mode'
                         }
                       </div>
                     </div>

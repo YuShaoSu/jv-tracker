@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { createGoogleSheetsClient } from '../services/googleSheetsApi';
+import { createGoogleSheetsClient, createOAuthOnlySheetsClient } from '../services/googleSheetsApi';
 import { GOOGLE_OAUTH_CLIENT_ID } from '../config/googleAuth';
 
 export const useGoogleSheets = () => {
@@ -12,6 +12,7 @@ export const useGoogleSheets = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('offline');
   const [sheetsClient, setSheetsClient] = useState(null);
+  const [useOAuthOnly, setUseOAuthOnly] = useState(false);
 
   // Load settings from localStorage on mount
   useEffect(() => {
@@ -22,15 +23,22 @@ export const useGoogleSheets = () => {
       setGoogleApiKey(settings.googleApiKey || '');
       setGoogleSheetId(settings.googleSheetId || '');
       setGoogleClientId(settings.googleClientId || '');
-      setIsConnected(!!(settings.googleApiKey && settings.googleSheetId));
+      setUseOAuthOnly(settings.useOAuthOnly || false);
+      // Connected if either API key + sheet ID, or OAuth-only mode with sheet ID
+      setIsConnected(!!(settings.googleSheetId && (settings.googleApiKey || settings.useOAuthOnly)));
       setLastSyncTime(settings.lastSync ? new Date(settings.lastSync) : null);
 
       // Create sheets client if we have credentials
-      if (settings.googleApiKey && settings.googleSheetId) {
+      if (settings.googleSheetId && (settings.googleApiKey || settings.useOAuthOnly)) {
         // Use hard-coded OAuth Client ID if none saved
         const finalClientId = settings.googleClientId || GOOGLE_OAUTH_CLIENT_ID;
-        const client = createGoogleSheetsClient(settings.googleApiKey, settings.googleSheetId, finalClientId);
+        
+        const client = settings.useOAuthOnly 
+          ? createOAuthOnlySheetsClient(settings.googleSheetId, finalClientId)
+          : createGoogleSheetsClient(settings.googleApiKey, settings.googleSheetId, finalClientId);
+          
         setSheetsClient(client);
+        
         // Update the state with the final client ID
         if (!settings.googleClientId) {
           setGoogleClientId(GOOGLE_OAUTH_CLIENT_ID);
@@ -39,16 +47,19 @@ export const useGoogleSheets = () => {
     }
   }, []);
 
-  const connectToGoogleSheets = (apiKey, sheetId, clientId = null) => {
+  const connectToGoogleSheets = (apiKey = null, sheetId, clientId = null, oauthOnly = false) => {
     setGoogleApiKey(apiKey);
     setGoogleSheetId(sheetId);
+    setUseOAuthOnly(oauthOnly);
     // Use hard-coded OAuth Client ID if none provided
     const finalClientId = clientId || GOOGLE_OAUTH_CLIENT_ID;
     setGoogleClientId(finalClientId);
     setIsConnected(true);
 
-    // Create sheets client
-    const client = createGoogleSheetsClient(apiKey, sheetId, finalClientId);
+    // Create appropriate client type
+    const client = oauthOnly 
+      ? createOAuthOnlySheetsClient(sheetId, finalClientId)
+      : createGoogleSheetsClient(apiKey, sheetId, finalClientId);
     setSheetsClient(client);
 
     // Save settings
@@ -56,6 +67,7 @@ export const useGoogleSheets = () => {
       googleApiKey: apiKey,
       googleSheetId: sheetId,
       googleClientId: finalClientId,
+      useOAuthOnly: oauthOnly,
       lastSync: lastSyncTime?.toISOString()
     };
     localStorage.setItem('appsScriptSettings', JSON.stringify(settings));
@@ -67,6 +79,7 @@ export const useGoogleSheets = () => {
     setGoogleApiKey('');
     setGoogleSheetId('');
     setGoogleClientId('');
+    setUseOAuthOnly(false);
     setIsConnected(false);
     setIsOAuthAuthenticated(false);
     setLastSyncTime(null);
@@ -147,6 +160,7 @@ export const useGoogleSheets = () => {
           googleApiKey: googleApiKey,
           googleSheetId: googleSheetId,
           googleClientId: googleClientId,
+          useOAuthOnly: useOAuthOnly,
           lastSync: now.toISOString()
         };
         localStorage.setItem('appsScriptSettings', JSON.stringify(settings));

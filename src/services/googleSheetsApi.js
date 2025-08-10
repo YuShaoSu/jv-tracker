@@ -10,13 +10,14 @@ const OAUTH_SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
  * Google Sheets API Client
  */
 export class GoogleSheetsApiClient {
-  constructor(apiKey, spreadsheetId, clientId = null) {
+  constructor(apiKey = null, spreadsheetId, clientId = null, oauthOnly = false) {
     this.apiKey = apiKey;
     this.spreadsheetId = spreadsheetId;
     this.sheetName = 'VocabularyData';
     this.clientId = clientId;
     this.accessToken = null;
     this.isOAuthAuthenticated = false;
+    this.oauthOnly = oauthOnly; // New flag for OAuth-only mode
   }
 
   /**
@@ -150,12 +151,23 @@ export class GoogleSheetsApiClient {
    */
   async testConnection() {
     try {
-      const url = `${SHEETS_API_BASE}/${this.spreadsheetId}?key=${this.apiKey}`;
-      const response = await fetch(url);
+      let url, response;
+      
+      if (this.oauthOnly && this.isOAuthAuthenticated) {
+        // Use OAuth token for both read and write access
+        url = `${SHEETS_API_BASE}/${this.spreadsheetId}`;
+        response = await this.makeAuthenticatedRequest(url);
+      } else if (this.apiKey) {
+        // Use API key for read-only access
+        url = `${SHEETS_API_BASE}/${this.spreadsheetId}?key=${this.apiKey}`;
+        response = await fetch(url);
+      } else {
+        throw new Error('Either API key or OAuth authentication is required');
+      }
       
       if (!response.ok) {
         if (response.status === 403) {
-          throw new Error('API key invalid or lacks permissions');
+          throw new Error(this.oauthOnly ? 'OAuth token invalid or lacks permissions' : 'API key invalid or lacks permissions');
         }
         if (response.status === 404) {
           throw new Error('Spreadsheet not found or not accessible');
@@ -168,7 +180,8 @@ export class GoogleSheetsApiClient {
         success: true,
         message: 'Connected successfully',
         spreadsheetTitle: data.properties?.title || 'Unknown',
-        sheets: data.sheets?.map(sheet => sheet.properties.title) || []
+        sheets: data.sheets?.map(sheet => sheet.properties.title) || [],
+        authMethod: this.oauthOnly ? 'OAuth' : 'API Key'
       };
     } catch (error) {
       return {
@@ -183,9 +196,18 @@ export class GoogleSheetsApiClient {
    */
   async ensureSheetSetup() {
     try {
-      // Get spreadsheet info
-      const infoUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}?key=${this.apiKey}`;
-      const infoResponse = await fetch(infoUrl);
+      // Get spreadsheet info using appropriate auth method
+      let infoResponse;
+      if (this.oauthOnly && this.isOAuthAuthenticated) {
+        const infoUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}`;
+        infoResponse = await this.makeAuthenticatedRequest(infoUrl);
+      } else if (this.apiKey) {
+        const infoUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}?key=${this.apiKey}`;
+        infoResponse = await fetch(infoUrl);
+      } else {
+        throw new Error('Authentication required');
+      }
+      
       const spreadsheetData = await infoResponse.json();
 
       // Check if our sheet exists
@@ -199,8 +221,17 @@ export class GoogleSheetsApiClient {
       }
 
       // Check if headers exist
-      const headersUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${this.sheetName}!A1:G1?key=${this.apiKey}`;
-      const headersResponse = await fetch(headersUrl);
+      let headersResponse;
+      if (this.oauthOnly && this.isOAuthAuthenticated) {
+        const headersUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${this.sheetName}!A1:G1`;
+        headersResponse = await this.makeAuthenticatedRequest(headersUrl);
+      } else if (this.apiKey) {
+        const headersUrl = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${this.sheetName}!A1:G1?key=${this.apiKey}`;
+        headersResponse = await fetch(headersUrl);
+      } else {
+        throw new Error('Authentication required');
+      }
+      
       const headersData = await headersResponse.json();
 
       const expectedHeaders = ['Kanji', 'Reading', 'Meaning', 'Status', 'Date Added', 'Examples', 'ID'];
@@ -238,11 +269,19 @@ export class GoogleSheetsApiClient {
 
       // Load data (skip header row)
       const range = `${this.sheetName}!A2:G1000`;
-      const url = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${range}?key=${this.apiKey}`;
+      let response;
       
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to load data: HTTP ${response.status}`);
+      if (this.oauthOnly && this.isOAuthAuthenticated) {
+        const url = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${range}`;
+        response = await this.makeAuthenticatedRequest(url);
+      } else if (this.apiKey) {
+        const url = `${SHEETS_API_BASE}/${this.spreadsheetId}/values/${range}?key=${this.apiKey}`;
+        response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Failed to load data: HTTP ${response.status}`);
+        }
+      } else {
+        throw new Error('Authentication required');
       }
 
       const data = await response.json();
@@ -483,4 +522,11 @@ export class GoogleSheetsApiClient {
  */
 export function createGoogleSheetsClient(apiKey, spreadsheetId, clientId = null) {
   return new GoogleSheetsApiClient(apiKey, spreadsheetId, clientId);
+}
+
+/**
+ * Factory function to create OAuth-only client (no API key needed)
+ */
+export function createOAuthOnlySheetsClient(spreadsheetId, clientId) {
+  return new GoogleSheetsApiClient(null, spreadsheetId, clientId, true);
 }

@@ -78,7 +78,7 @@ const JapaneseVocabTracker = () => {
               </div>
 
               {/* Sync Button */}
-              {isConnected && googleSheetsHook.googleApiKey && googleSheetsHook.googleSheetId && (
+              {isConnected && googleSheetsHook.googleSheetId && (
                 <button
                   onClick={handleSyncToSheets}
                   disabled={isSyncing}
